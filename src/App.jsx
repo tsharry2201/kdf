@@ -3,6 +3,9 @@ import PDFViewer from './components/PDFViewer'
 import PDFParser from './components/PDFParser'
 import InteractivePDFViewer from './components/InteractivePDFViewer'
 import './App.css'
+// 修复 react-pdf 的 TextLayer 与 AnnotationLayer 警告，并确保层叠关系正确显示
+import 'react-pdf/dist/Page/AnnotationLayer.css'
+import 'react-pdf/dist/Page/TextLayer.css'
 
 function App() {
   const [pdfFile, setPdfFile] = useState(null)

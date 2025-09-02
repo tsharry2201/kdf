@@ -28,7 +28,7 @@ const InteractivePDFViewer = ({ file }) => {
   const [associatedImages, setAssociatedImages] = useState([]) // 新增：关联的图片
   const [showDebugBounds, setShowDebugBounds] = useState(false) // 调试：显示解析块边界
   const [pageScale, setPageScale] = useState(1) // PDF页面缩放比例
-  const [containerDimensions, setContainerDimensions] = useState({ width: 'auto', height: 'auto' }) // 动态容器尺寸
+  const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
 
   const pageRef = useRef(null) // 保留：外层容器
   const pageWrapperRef = useRef(null) // 新增：实际页面包裹层（与高亮同层）
@@ -69,6 +69,8 @@ const InteractivePDFViewer = ({ file }) => {
       setPageNumber(pageNum)
     }
   }
+  
+  // 移除手动缩放（按需可再开启）
 
   // 处理文本选择 - 左键拖拽后弹出“是否高亮”确认
   const handleTextSelection = (event) => {
@@ -180,11 +182,13 @@ const InteractivePDFViewer = ({ file }) => {
     const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
     let matched = null
     if (selectedArea && selectedText) {
-      matched = matchAnnotation(selectedArea)
-      if (matched) setCurrentTargetBlock({ type: matched.type || 'text', area: matched.position, text: matched.content })
+      // 选中文本时也优先匹配最近图片/表格
+      matched = matchVisualAnnotation(selectedArea) || matchAnnotation(selectedArea)
+      if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
     } else if (wrapperRect) {
-      matched = matchAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
-      if (matched) setCurrentTargetBlock({ type: matched.type || 'text', area: matched.position, text: matched.content })
+      // 右键点击优先匹配图片/表格
+      matched = matchVisualAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
+      if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
     }
     fileInputRef.current?.click()
     setShowContextMenu(false)
@@ -213,8 +217,10 @@ const InteractivePDFViewer = ({ file }) => {
           fileSize: uploadedFile.size,
           fileType: uploadedFile.type,
           uploadedAt: new Date().toISOString(),
-          targetType: currentTargetBlock?.type || (selectedText ? 'text' : 'image'),
-          targetText: currentTargetBlock?.text
+          targetType: currentTargetBlock?.type || 'image',
+          targetText: currentTargetBlock?.text,
+          targetId: currentTargetBlock?.targetId,
+          targetName: currentTargetBlock?.targetName
         }
         
         setAttachments(prev => [...prev, newAttachment])
@@ -301,7 +307,7 @@ const InteractivePDFViewer = ({ file }) => {
     setError(null)
     setPageNumber(1)
     setPageScale(1) // 重置缩放比例
-    setContainerDimensions({ width: 'auto', height: 'auto' }) // 重置容器尺寸
+    setContentDimensions({ width: 'auto', height: 'auto' }) // 重置内容尺寸
     setHighlights([])
     setAttachments([])
     setAssociatedImages([]) // 重置关联图片
@@ -328,11 +334,22 @@ const InteractivePDFViewer = ({ file }) => {
     }
   }, [file])
 
-  // 当页面改变时重置缩放比例和容器尺寸
+  // 当页面改变时重置缩放比例和内容尺寸
   useEffect(() => {
     setPageScale(1)
-    setContainerDimensions({ width: 'auto', height: 'auto' })
+    setContentDimensions({ width: 'auto', height: 'auto' })
   }, [pageNumber])
+
+  // 当缩放变化时，根据基础尺寸更新内容尺寸
+  useEffect(() => {
+    const base = basePageSize[pageNumber]
+    if (base?.width && base?.height) {
+      setContentDimensions({
+        width: Math.round(base.width * pageScale),
+        height: Math.round(base.height * pageScale)
+      })
+    }
+  }, [pageScale, pageNumber, basePageSize])
 
   // 解析当前页，生成与解析器一致的块（文本合并+图片占位）
   useEffect(() => {
@@ -340,14 +357,52 @@ const InteractivePDFViewer = ({ file }) => {
       if (!pdfDoc || !pageNumber) return
       try {
         const page = await pdfDoc.getPage(pageNumber)
-        const viewport = page.getViewport({ scale: 1.0 })
+        
+        // 使用CropBox的viewport，确保坐标系一致
+        const viewport = page.getViewport({ scale: 1.0, useCropBox: true })
+
+        // 尝试获取CropBox/MediaBox偏移（不同pdfjs版本可能没有这些API）
+        let cropOffsetX = 0
+        let cropOffsetY = 0
+        try {
+          // @ts-ignore 运行时检测
+          if (typeof page.getCropBox === 'function' && typeof page.getMediaBox === 'function') {
+            const cropBox = page.getCropBox()
+            const mediaBox = page.getMediaBox()
+            cropOffsetX = (cropBox?.x || 0) - (mediaBox?.x || 0)
+            cropOffsetY = (cropBox?.y || 0) - (mediaBox?.y || 0)
+            console.log('CropBox偏移:', { cropOffsetX, cropOffsetY })
+            console.log('MediaBox尺寸:', mediaBox?.width, 'x', mediaBox?.height)
+            console.log('CropBox尺寸:', cropBox?.width, 'x', cropBox?.height)
+          } else {
+            const view = page.view || [0, 0, viewport.width, viewport.height]
+            console.log('PDF页面view(无getCropBox API):', view)
+          }
+        } catch (e) {
+          console.warn('获取CropBox/MediaBox失败，使用偏移0:', e)
+          cropOffsetX = 0
+          cropOffsetY = 0
+        }
+        // 提前记录基础尺寸，避免后续步骤异常时影响调试边界显示
+        setBasePageSize(prev => ({ ...prev, [pageNumber]: { width: viewport.width, height: viewport.height } }))
+
         // 文本收集
         const textContent = await page.getTextContent()
         const textItems = []
         textContent.items.forEach((item, index) => {
           if (item.str !== undefined) {
-            const x = item.transform[4] || 0
-            const y = viewport.height - (item.transform[5] || 0)
+            // 步骤1：将MediaBox坐标转换为CropBox坐标
+            const mediaX = item.transform[4] || 0
+            const mediaY = item.transform[5] || 0
+            
+            // 转换为CropBox坐标系
+            const cropX = mediaX - cropOffsetX
+            const cropY = mediaY - cropOffsetY
+            
+            // 转换为浏览器坐标系（Y轴翻转）
+            const x = cropX
+            const y = viewport.height - cropY
+            
             textItems.push({
               index,
               content: item.str,
@@ -388,6 +443,12 @@ const InteractivePDFViewer = ({ file }) => {
 
         // 智能区域识别：识别表格和图片等大区域
         const annotations = []
+        // 统一坐标：把所有识别到的区域转换为“容器像素坐标”（相对于pageWrapperRef的绝对定位）
+        const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
+        const pdfPageElement = pageWrapperRef.current?.querySelector('.react-pdf__Page')
+        const pageRect = pdfPageElement?.getBoundingClientRect()
+        const offsetX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
+        const offsetY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
         
         // 1. 检测表格区域（基于文本密度和布局）
         const detectTables = (textItems) => {
@@ -432,7 +493,7 @@ const InteractivePDFViewer = ({ file }) => {
               const columnVariance = columnCounts.every(count => Math.abs(count - avgColumns) <= 2) // 列数差异不超过2
               
               if (columnVariance) { // 只有列数相对一致才认为是表格
-                // 计算表格边界，创建大的识别框
+                // 计算表格边界，创建大的识别框（基于CropBox坐标系）
                 const allItems = tableRows.flat()
                 const minX = Math.min(...allItems.map(i => i.x))
                 const maxX = Math.max(...allItems.map(i => i.x + i.width))
@@ -446,14 +507,19 @@ const InteractivePDFViewer = ({ file }) => {
                 const tableW = Math.min(viewport.width - tableX, maxX - minX + tablePadding * 2)
                 const tableH = Math.min(viewport.height - tableY, maxY - minY + tablePadding * 2)
                 
+                // 转成容器像素坐标
+                const pxX = offsetX + tableX * pageScale
+                const pxY = offsetY + tableY * pageScale
+                const pxW = tableW * pageScale
+                const pxH = tableH * pageScale
                 tables.push({
                   id: `table_${pageNumber}_0`,
                   type: 'table',
                   position: {
-                    x: Math.round(tableX * 100) / 100,
-                    y: Math.round(tableY * 100) / 100,
-                    width: Math.round(tableW * 100) / 100,
-                    height: Math.round(tableH * 100) / 100
+                    x: Math.round(pxX * 100) / 100,
+                    y: Math.round(pxY * 100) / 100,
+                    width: Math.round(pxW * 100) / 100,
+                    height: Math.round(pxH * 100) / 100
                   },
                   content: `表格区域 (${tableRows.length}行 x ${Math.max(...tableRows.map(r => r.length))}列)`,
                   rows: tableRows.length,
@@ -466,27 +532,48 @@ const InteractivePDFViewer = ({ file }) => {
           return tables
         }
         
-        // 2. 检测图片区域（改进的算法）
+        // 2. 检测图片区域（改进的算法：维护矩阵栈）
         const detectImages = async () => {
           const images = []
           
           try {
             const operatorList = await page.getOperatorList()
-          let imageCount = 0
+            let imageCount = 0
             let currentTransform = [1, 0, 0, 1, 0, 0]
+            const transformStack = []
           
           for (let i = 0; i < operatorList.fnArray.length; i++) {
             const op = operatorList.fnArray[i]
             const args = operatorList.argsArray[i]
             
-            if (op === pdfjs.OPS.transform) {
+            if (op === pdfjs.OPS.save) {
+              transformStack.push([...currentTransform])
+            } else if (op === pdfjs.OPS.restore) {
+              const restored = transformStack.pop()
+              if (restored) currentTransform = restored
+            } else if (op === pdfjs.OPS.transform) {
+              const [a2, b2, c2, d2, e2, f2] = args
+              const [a1, b1, c1, d1, e1, f1] = currentTransform
+              currentTransform = [
+                a1 * a2 + c1 * b2,
+                b1 * a2 + d1 * b2,
+                a1 * c2 + c1 * d2,
+                b1 * c2 + d1 * d2,
+                a1 * e2 + c1 * f2 + e1,
+                b1 * e2 + d1 * f2 + f1
+              ]
+            } else if (op === pdfjs.OPS.setTransform) {
               const [a, b, c, d, e, f] = args
               currentTransform = [a, b, c, d, e, f]
             }
             
-            if (op === pdfjs.OPS.paintImageXObject || 
-                op === pdfjs.OPS.paintXObject ||
-                  op === pdfjs.OPS.paintFormXObject) {
+            if (
+              op === pdfjs.OPS.paintInlineImageXObject ||
+              op === pdfjs.OPS.paintImageXObject ||
+              op === pdfjs.OPS.paintImageMaskXObject ||
+              op === pdfjs.OPS.paintXObject ||
+              op === pdfjs.OPS.paintFormXObject
+            ) {
               
                 // 精确计算最终变换距阵 - 根据您的建议
               const [a, b, c, d, e, f] = currentTransform
@@ -502,24 +589,31 @@ const InteractivePDFViewer = ({ file }) => {
                   { x: 0, y: 1 }  // 左上角
                 ]
                 
-                // 应用变换矩阵到每个角点
+                // 应用变换矩阵到每个角点（MediaBox坐标系）
                 const transformedCorners = corners.map(corner => ({
                   x: a * corner.x + c * corner.y + e,
                   y: b * corner.x + d * corner.y + f
                 }))
                 
-                console.log(`图片 ${imageCount} 变换后角点:`, transformedCorners)
+                // 转换为CropBox坐标系
+                const cropTransformedCorners = transformedCorners.map(corner => ({
+                  x: corner.x - cropOffsetX,
+                  y: corner.y - cropOffsetY
+                }))
                 
-                // 计算边界框
-                const xCoords = transformedCorners.map(p => p.x)
-                const yCoords = transformedCorners.map(p => p.y)
+                console.log(`图片 ${imageCount} 变换后角点:`, transformedCorners)
+                console.log(`图片 ${imageCount} CropBox角点:`, cropTransformedCorners)
+                
+                // 计算边界框（使用CropBox坐标系）
+                const xCoords = cropTransformedCorners.map(p => p.x)
+                const yCoords = cropTransformedCorners.map(p => p.y)
                 
                 const minX = Math.min(...xCoords)
                 const maxX = Math.max(...xCoords)
                 const minY = Math.min(...yCoords)
                 const maxY = Math.max(...yCoords)
                 
-                // 转换为浏览器坐标系（Y轴翻转）
+                // 转换为浏览器坐标系（Y轴翻转，基于CropBox）
                 let x = minX
                 let y = viewport.height - maxY  // 关键：使用maxY并翻转
                 let width = maxX - minX
@@ -531,48 +625,15 @@ const InteractivePDFViewer = ({ file }) => {
                   viewport: { width: viewport.width, height: viewport.height }
                 })
                 
-                // 考虑容器偏移 - 解决"坐标原点偏移"问题
-                // 获取PDF页面在容器中的实际位置偏移
-                const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
-                const pdfPageElement = pageWrapperRef.current?.querySelector('.react-pdf__Page')
-                const pageRect = pdfPageElement?.getBoundingClientRect()
-                
-                if (wrapperRect && pageRect) {
-                  // 计算PDF页面相对于容器的偏移
-                  const offsetX = pageRect.left - wrapperRect.left
-                  const offsetY = pageRect.top - wrapperRect.top
-                  
-                  console.log(`图片 ${imageCount} 容器偏移:`, { 
-                    offsetX, offsetY,
-                    wrapperRect: { left: wrapperRect.left, top: wrapperRect.top },
-                    pageRect: { left: pageRect.left, top: pageRect.top }
-                  })
-                  
-                  // 应用缩放比例到PDF坐标
-                  const scaledX = x * pageScale
-                  const scaledY = y * pageScale
-                  const scaledWidth = width * pageScale
-                  const scaledHeight = height * pageScale
-                  
-                  // 添加容器偏移，得到最终在浏览器中的绝对位置
-                  x = offsetX + scaledX
-                  y = offsetY + scaledY
-                  width = scaledWidth
-                  height = scaledHeight
-                  
-                  console.log(`图片 ${imageCount} 应用偏移后:`, { 
-                    缩放后: { scaledX, scaledY, scaledWidth, scaledHeight },
-                    最终位置: { x, y, width, height },
-                    pageScale
-                  })
-                } else {
-                  console.log(`图片 ${imageCount} 无法获取容器信息，使用原始坐标`)
-                  // 如果无法获取容器信息，至少应用缩放
-                  x = x * pageScale
-                  y = y * pageScale
-                  width = width * pageScale
-                  height = height * pageScale
-                }
+                // 应用缩放并加上容器偏移，统一为容器像素坐标
+                const scaledX = offsetX + x * pageScale
+                const scaledY = offsetY + y * pageScale
+                const scaledWidth = width * pageScale
+                const scaledHeight = height * pageScale
+                x = scaledX
+                y = scaledY
+                width = scaledWidth
+                height = scaledHeight
                 
                 // 验证边界框的合理性（现在坐标是相对于容器的）
                 const wrapperWidth = wrapperRect?.width || viewport.width
@@ -619,44 +680,155 @@ const InteractivePDFViewer = ({ file }) => {
             }
           }
           
-            // 如果没有检测到图片但有大片空白区域，可能是图片
-            if (imageCount === 0) {
-              // 检测大的空白区域可能是图片
-              const pageWidth = viewport.width
-              const pageHeight = viewport.height
-              const textCoverage = textItems.reduce((total, item) => {
-                return total + (item.width * item.height)
-              }, 0)
-              const totalArea = pageWidth * pageHeight
-              const textRatio = textCoverage / totalArea
-              
-              if (textRatio < 0.3) { // 文本覆盖率小于30%，可能有大图片
-                images.push({
-                  id: `large_content_${pageNumber}`,
-              type: 'image',
-              position: {
-                    x: Math.round(pageWidth * 0.1),
-                    y: Math.round(pageHeight * 0.1),
-                    width: Math.round(pageWidth * 0.8),
-                    height: Math.round(pageHeight * 0.8)
-                  },
-                  content: '可能的大图片区域',
-                  description: '检测到可能包含图片或图表的大区域'
-                })
-              }
-            }
+            // 取消简单的整页“大块空白”兜底，避免识别到完全空白
             
           } catch (error) {
             console.error('图片检测失败:', error)
           }
-          
+
+          // 基于“标题+稀疏度”的兜底：仅在检测到 Figure/Table 标题附近才推断候选块
+          try {
+            const pageW = viewport.width
+            const pageH = viewport.height
+            const margin = 20
+            const bins = 32 // 垂直方向划分
+            const bandH = pageH / bins
+            const bandCover = new Array(bins).fill(0)
+
+            // 统计每个水平带的文本覆盖比例
+            textItems.forEach(t => {
+              const yTop = t.y
+              const yBottom = t.y + Math.max(t.height, 10)
+              const start = Math.max(0, Math.floor(yTop / bandH))
+              const end = Math.min(bins - 1, Math.floor(yBottom / bandH))
+              for (let bIdx = start; bIdx <= end; bIdx++) {
+                bandCover[bIdx] += Math.max(t.width, 1) * Math.max(t.height, 10)
+              }
+            })
+
+            const bandArea = pageW * bandH
+            // 将文本按行聚合，便于识别 “Figure/Table N” 标题
+            const lines = []
+            const sorted = [...textItems].sort((a, b) => a.y - b.y || a.x - b.x)
+            const yTol = 8
+            let cur = []
+            sorted.forEach(t => {
+              if (cur.length === 0) cur = [t]
+              else {
+                const avgY = cur.reduce((s, i) => s + i.y, 0) / cur.length
+                if (Math.abs(t.y - avgY) <= yTol) cur.push(t)
+                else { lines.push(cur); cur = [t] }
+              }
+            })
+            if (cur.length) lines.push(cur)
+
+            const lineObjs = lines.map(items => ({
+              text: items.map(i => i.content).join(''),
+              x: Math.min(...items.map(i => i.x)),
+              y: Math.min(...items.map(i => i.y)),
+              width: Math.max(...items.map(i => i.x + i.width)) - Math.min(...items.map(i => i.x)),
+              height: Math.max(...items.map(i => i.height))
+            }))
+
+            const figureLines = lineObjs.filter(l => /(Figure|Fig\.)\s*\d+/i.test(l.text))
+            const tableLines = lineObjs.filter(l => /(Table)\s*\d+/i.test(l.text))
+
+            const addBlockAboveCaption = (cap, kind, idxBase) => {
+              // 在包含 Figure/Table 的标题附近做“窄范围”搜索，减少过大框
+              const capBand = Math.max(0, Math.floor(cap.y / bandH))
+              const searchUp = Math.floor((pageH * 0.35) / bandH) // 向上最多搜 35% 页高
+              const startBand = Math.max(0, capBand - searchUp)
+
+              // 从标题向上，找到一段低密度带；遇到明显高密度(>0.22)则截止，避免跨到正文
+              let b0 = -1, b1 = -1
+              for (let b = capBand - 1; b >= startBand; b--) {
+                const ratio = bandCover[b] / (bandArea || 1)
+                if (ratio < 0.12) {
+                  if (b1 === -1) b1 = b
+                  b0 = b
+                } else if (ratio > 0.22) {
+                  // 碰到较高密度说明到了正文，停止
+                  if (b0 !== -1) break
+                  else break
+                } else if (b0 !== -1) {
+                  // 低密度段结束
+                  break
+                }
+              }
+              if (b0 === -1 || b1 === -1) return
+
+              const yMin = b0 * bandH
+              const yMax = (b1 + 1) * bandH
+              let boxH = yMax - yMin - 8
+              if (boxH < 60) return
+
+              // 利用标题的宽度近似图/表宽度，左右各加少量 padding
+              const padX = Math.min(24, cap.width * 0.08)
+              let x = Math.max(margin, cap.x - padX)
+              let w = Math.min(pageW - x - margin, cap.width + padX * 2)
+
+              // 限制最大高度，避免出现跨越过高的框
+              const maxH = Math.min(pageH * 0.55, cap.width * 0.9)
+              boxH = Math.min(boxH, maxH)
+
+              // 转换为容器像素坐标
+              const pxX = offsetX + x * pageScale
+              const pxW = Math.max(80, w * pageScale)
+              const pxY = offsetY + Math.max(0, yMin + 5) * pageScale
+              const pxH = Math.max(60, boxH * pageScale)
+
+              // 过滤：区域内存在少量元素（对图形：坐标轴/刻度文本；对表格：表头文本）
+              const textInside = textItems.some(t => {
+                const tx = t.x * pageScale + offsetX
+                const ty = t.y * pageScale + offsetY
+                return tx >= pxX && tx <= pxX + pxW && ty >= pxY && ty <= pxY + pxH
+              })
+              if (!textInside && kind === 'table') return // 表格必须包含少量文本
+
+              images.push({
+                id: `${kind}_caption_${pageNumber}_${idxBase}`,
+                type: kind === 'table' ? 'table' : 'image',
+                position: { x: Math.round(pxX), y: Math.round(pxY), width: Math.round(pxW), height: Math.round(pxH) },
+                content: `${kind} caption block`,
+                description: '基于标题与低文本密度的候选块（收紧为标题宽度附近）'
+              })
+            }
+
+            figureLines.forEach((cap, idx) => addBlockAboveCaption(cap, 'image', idx))
+            tableLines.forEach((cap, idx) => addBlockAboveCaption(cap, 'table', idx))
+          } catch (e) {
+            console.warn('文本稀疏度兜底失败:', e)
+          }
+
           return images
         }
         
         // 执行检测
-        const tables = detectTables(textItems)
-        const images = await detectImages()
-        
+        let tables = detectTables(textItems)
+        let images = await detectImages()
+
+        // 统一图片命名与排序，生成“图片几”
+        if (images.length > 0) {
+          images = images
+            .sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x))
+            .map((img, idx) => ({
+              ...img,
+              index: idx + 1,
+              name: `图片${idx + 1}`
+            }))
+        }
+
+        // 为表格命名（表格一、表格二…）
+        if (tables.length > 0) {
+          tables = tables
+            .sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x))
+            .map((tb, idx) => ({
+              ...tb,
+              index: idx + 1,
+              name: `表格${idx + 1}`
+            }))
+        }
+
         // 合并所有区域
         annotations.push(...tables)
         annotations.push(...images)
@@ -674,7 +846,7 @@ const InteractivePDFViewer = ({ file }) => {
       }
     }
     parseCurrentPage()
-  }, [pdfDoc, pageNumber])
+  }, [pdfDoc, pageNumber, pageScale])
 
   // 工具：计算矩形交叠IoU
   const rectIoU = (a, b) => {
@@ -689,25 +861,24 @@ const InteractivePDFViewer = ({ file }) => {
     return union > 0 ? inter / union : 0
   }
 
-  // 专门针对图片的匹配函数
-  const matchImageAnnotation = (areaOrPoint) => {
+  // 专门针对图片/表格等视觉块的匹配函数
+  const matchVisualAnnotation = (areaOrPoint) => {
     const anns = parsedByPage[pageNumber] || []
-    // 只关注图片类型的注释
-    const imageAnns = anns.filter(ann => ann.type === 'image')
+    // 只关注图片和表格类型
+    const imageAnns = anns.filter(ann => ann.type === 'image' || ann.type === 'table')
     
     if (imageAnns.length === 0) {
       return null
     }
 
-    const scaleRatio = 1 / pageScale
-
+    // 现在注释坐标与选区/点击坐标都在同一坐标系（容器像素），无需再缩放
     if (areaOrPoint && typeof areaOrPoint.x === 'number' && typeof areaOrPoint.width === 'number') {
-      // 选区匹配图片
+      // 选区匹配图片（容器像素）
       const areaPdf = { 
-        x: areaOrPoint.x * scaleRatio, 
-        y: areaOrPoint.y * scaleRatio, 
-        width: areaOrPoint.width * scaleRatio, 
-        height: areaOrPoint.height * scaleRatio 
+        x: areaOrPoint.x, 
+        y: areaOrPoint.y, 
+        width: areaOrPoint.width, 
+        height: areaOrPoint.height 
       }
       
       let best = null
@@ -727,10 +898,10 @@ const InteractivePDFViewer = ({ file }) => {
     
     // 点击匹配图片
     const { px, py } = areaOrPoint
-    const pxPdf = px * scaleRatio
-    const pyPdf = py * scaleRatio
+    const pxPdf = px
+    const pyPdf = py
     
-    console.log('图片匹配 - 点击坐标:', { px, py, pxPdf, pyPdf })
+    console.log('视觉块匹配 - 点击坐标:', { px, py, pxPdf, pyPdf })
     
     // 优先查找包含点击点的图片
     let bestContains = null
@@ -740,7 +911,7 @@ const InteractivePDFViewer = ({ file }) => {
     imageAnns.forEach(img => {
       const r = img.position
       
-      console.log(`检查图片 ${img.id}:`, r)
+      console.log(`检查视觉块 ${img.id}:`, r)
       
       // 检查点击是否在图片边界内
       const contains = pxPdf >= r.x && pxPdf <= r.x + r.width && 
@@ -748,7 +919,7 @@ const InteractivePDFViewer = ({ file }) => {
       
       if (contains) {
         bestContains = img
-        console.log(`点击命中图片: ${img.id}`)
+        console.log(`点击命中视觉块: ${img.id}`)
       }
       
       // 计算到图片中心的距离
@@ -764,14 +935,14 @@ const InteractivePDFViewer = ({ file }) => {
     
     // 优先返回包含点击点的图片，否则返回最近的图片
     const result = bestContains || (bestDistance < 200 ? bestByDistance : null) // 200像素内才考虑
-    console.log('图片匹配结果:', result?.id, '距离:', bestDistance)
+    console.log('视觉块匹配结果:', result?.id, '距离:', bestDistance)
     return result
   }
 
   // 通用匹配函数（保留原有逻辑但简化）
   const matchAnnotation = (areaOrPoint) => {
-    // 优先尝试匹配图片
-    const imageMatch = matchImageAnnotation(areaOrPoint)
+    // 优先尝试匹配图片/表格等视觉块
+    const imageMatch = matchVisualAnnotation(areaOrPoint)
     if (imageMatch) {
       return imageMatch
     }
@@ -784,15 +955,14 @@ const InteractivePDFViewer = ({ file }) => {
       return null
     }
 
-    const scaleRatio = 1 / pageScale
-
+    // 注释与选区统一为容器像素坐标
     if (areaOrPoint && typeof areaOrPoint.x === 'number' && typeof areaOrPoint.width === 'number') {
       // 选区匹配文本
       const areaPdf = { 
-        x: areaOrPoint.x * scaleRatio, 
-        y: areaOrPoint.y * scaleRatio, 
-        width: areaOrPoint.width * scaleRatio, 
-        height: areaOrPoint.height * scaleRatio 
+        x: areaOrPoint.x, 
+        y: areaOrPoint.y, 
+        width: areaOrPoint.width, 
+        height: areaOrPoint.height 
       }
       
     let best = null
@@ -812,8 +982,8 @@ const InteractivePDFViewer = ({ file }) => {
     
     // 点击匹配文本
     const { px, py } = areaOrPoint
-    const pxPdf = px * scaleRatio
-    const pyPdf = py * scaleRatio
+    const pxPdf = px
+    const pyPdf = py
     
     let bestContains = null
     let bestDistance = Infinity
@@ -901,6 +1071,8 @@ const InteractivePDFViewer = ({ file }) => {
           {showDebugBounds ? '🔍 隐藏边界' : '🔍 显示边界'}
         </button>
 
+        {/* 放大/缩小功能按需求已移除 */}
+
       </div>
 
       {/* 状态信息 */}
@@ -913,41 +1085,33 @@ const InteractivePDFViewer = ({ file }) => {
         <span>关联图片: {associatedImages.filter(img => img.pageNumber === pageNumber).length} 个</span>
       </div>
 
-      {/* PDF滚动控制容器 */}
+      {/* PDF页面容器 - 使用CropBox尺寸，限制画布范围 */}
       <div style={{
         display: loading || error || !file ? 'none' : 'block',
-        maxHeight: containerDimensions.height === 'auto' ? 'none' : `${containerDimensions.height + 40}px`,
-        maxWidth: containerDimensions.width === 'auto' ? 'none' : `${containerDimensions.width + 40}px`,
-        overflow: 'auto',
-        padding: '10px',
-        margin: '10px auto',
-        boxSizing: 'border-box'
+        padding: '20px',
+        margin: '0 auto',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        // 设置最大高度，允许滚动但限制画布范围
+        maxHeight: 'calc(100vh - 200px)',
+        overflow: 'auto'
       }}>
-        {/* PDF页面容器 - 始终渲染但控制显示 */}
+        {/* PDF页面容器 */}
         <div 
           style={{
             ...styles.pageContainer,
-          userSelect: 'text', // 允许文本选择
-          WebkitUserSelect: 'text',
-          MozUserSelect: 'text',
-          msUserSelect: 'text',
-          // 使用动态计算的容器尺寸，消除多余空白
-          width: containerDimensions.width === 'auto' ? 'auto' : `${containerDimensions.width}px`,
-          height: containerDimensions.height === 'auto' ? 'auto' : `${containerDimensions.height}px`,
-          // 严格限制容器大小，防止任何额外空间
-          minWidth: containerDimensions.width === 'auto' ? 'auto' : `${containerDimensions.width}px`,
-          minHeight: containerDimensions.height === 'auto' ? 'auto' : `${containerDimensions.height}px`,
-          maxWidth: containerDimensions.width === 'auto' ? 'auto' : `${containerDimensions.width}px`,
-          maxHeight: containerDimensions.height === 'auto' ? 'auto' : `${containerDimensions.height}px`,
-          // 居中显示，减少外边距
-          margin: '10px auto',
-          // 严格控制溢出
-          overflow: 'hidden',
-          // 确保紧贴内容
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center'
-        }}
+            userSelect: 'text',
+            WebkitUserSelect: 'text',
+            MozUserSelect: 'text',
+            msUserSelect: 'text',
+            // 仅根据宽度自适应，避免人为固定高度导致底部留白
+            width: contentDimensions.width === 'auto' ? 'auto' : `${contentDimensions.width}px`,
+            // 不固定高度/最小高度，让容器以内容真实高度为准
+            maxWidth: '100%',
+            margin: '0 auto',
+            overflow: 'visible',
+            display: 'block'
+          }}
         ref={pageRef}
         onClick={(e) => {
           console.log('PDF容器点击事件')
@@ -975,53 +1139,44 @@ const InteractivePDFViewer = ({ file }) => {
                 renderTextLayer={true}
                 renderAnnotationLayer={true}
                 scale={pageScale}
+                // 关键：使用CropBox而不是MediaBox
+                useCropBox={true}
                 onLoadSuccess={(page) => {
                   console.log('页面渲染成功', page)
                   
-                  // 获取PDF页面的原始尺寸
-                  const viewport = page.getViewport({ scale: 1.0 })
+                  // 步骤2：在渲染时，强制使用CropBox尺寸，避免高度被MediaBox拉大造成底部留白
+                  const viewport = page.getViewport({ scale: 1.0, useCropBox: true })
+                  
+                  // 由于useCropBox=true，viewport已经是基于CropBox的尺寸
                   const pdfWidth = viewport.width
                   const pdfHeight = viewport.height
-                  const pdfAspectRatio = pdfWidth / pdfHeight
                   
-                  console.log('PDF页面原始尺寸:', pdfWidth, 'x', pdfHeight)
-                  console.log('PDF宽高比:', pdfAspectRatio)
+                  console.log('PDF页面尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
                   
-                  // 计算适应屏幕的最大尺寸，留出控制按钮和边距空间
-                  const availableWidth = window.innerWidth - 100 // 减去左右边距和滚动条
-                  const availableHeight = window.innerHeight - 200 // 减去控制按钮、标题等高度
-                  const maxWidth = Math.min(availableWidth, 1000) // 最大宽度
-                  const maxHeight = Math.min(availableHeight, 700) // 最大高度
+                  // 计算适合屏幕的缩放比例（稍微放大一点）
+                  const availableWidth = window.innerWidth - 60
+                  const availableHeight = window.innerHeight - 160
+                  const widthScale = availableWidth / pdfWidth
+                  const heightScale = availableHeight / pdfHeight
                   
-                  console.log('可用屏幕空间:', availableWidth, 'x', availableHeight)
-                  console.log('最大容器尺寸:', maxWidth, 'x', maxHeight)
+                  // 选择较小的缩放比例，确保页面完全可见，同时整体放大1.2倍
+                  const optimalScale = Math.min(widthScale, heightScale, 1.6)
+                  const finalScale = Math.min(Math.max(optimalScale * 1.2, 0.5), 2.0)
                   
-                  // 根据PDF宽高比选择最优缩放策略
-                  const widthBasedScale = maxWidth / pdfWidth
-                  const heightBasedScale = maxHeight / pdfHeight
-                  const optimalScale = Math.min(widthBasedScale, heightBasedScale, 1.5) // 限制最大缩放
+                  console.log('PDF内容尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
+                  console.log('最终缩放比例:', finalScale)
                   
-                  // 限制缩放比例范围
-                  const finalScale = Math.min(Math.max(optimalScale, 0.2), 1.8)
-                  
-                  // 根据最终缩放比例计算精确的容器尺寸
+                  // 计算实际内容尺寸（基于CropBox和缩放比例）
                   const actualWidth = Math.round(pdfWidth * finalScale)
                   const actualHeight = Math.round(pdfHeight * finalScale)
                   
-                  console.log('计算的容器尺寸:', actualWidth, 'x', actualHeight)
-                  console.log('最终缩放比例:', finalScale)
-                  console.log('容器宽高比:', actualWidth / actualHeight)
-                  console.log('PDF宽高比:', pdfAspectRatio)
+                  console.log('实际显示尺寸 (基于CropBox):', actualWidth, 'x', actualHeight)
                   
-                  // 设置精确的容器尺寸，确保无多余空间
-                  setContainerDimensions({
+                  setPageScale(finalScale)
+                  setContentDimensions({
                     width: actualWidth,
                     height: actualHeight
                   })
-                  
-                  if (Math.abs(pageScale - finalScale) > 0.01) {
-                    setPageScale(finalScale)
-                  }
                 }}
                 onLoadError={(error) => {
                   console.error('页面渲染失败:', error)
@@ -1062,7 +1217,7 @@ const InteractivePDFViewer = ({ file }) => {
                     left: (attachment.area?.x ?? 20),
                     top: (attachment.area?.y ?? 20)
                   }}
-                  title={`附件: ${attachment.fileName}`}
+                  title={`附件: ${attachment.fileName}${attachment.targetName ? `（关联到：${attachment.targetName}）` : ''}`}
                 >
                   📎
                 </div>
@@ -1099,25 +1254,52 @@ const InteractivePDFViewer = ({ file }) => {
               const anns = parsedByPage[pageNumber] || []
               const base = basePageSize[pageNumber]
               
-              if (!base || anns.length === 0) return null
+              if (!base) return null
               
-              return anns.map((ann, index) => {
+              const overlays = []
+
+              // 如果没有任何解析块，至少画出整页边框，帮助确认层级无问题
+              if (anns.length === 0) {
+                const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
+                const pageRect = pageWrapperRef.current?.querySelector('.react-pdf__Page')?.getBoundingClientRect()
+                const oX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
+                const oY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
+                overlays.push(
+                  <div
+                    key={`debug-page-${pageNumber}`}
+                    style={{
+                      position: 'absolute',
+                      left: oX,
+                      top: oY,
+                      width: base.width * pageScale,
+                      height: base.height * pageScale,
+                      border: '2px dashed #999',
+                      background: 'transparent',
+                      pointerEvents: 'none',
+                      zIndex: 14
+                    }}
+                    title={'页面边界(用于调试)'}
+                  />
+                )
+              }
+
+              anns.forEach((ann) => {
                 const r = ann.position
-                // 使用直接转换方法，已验证这是最准确的
-                const left = r.x * pageScale
-                const top = r.y * pageScale
-                const width = r.width * pageScale
-                const height = r.height * pageScale
+                // 现在所有position均为容器像素坐标，直接渲染
+                const left = r.x
+                const top = r.y
+                const width = r.width
+                const height = r.height
                 
-                return (
+                overlays.push(
                   <div
                     key={`debug-${ann.id}`}
                     style={{
                       position: 'absolute',
-                      left: left,
-                      top: top,
-                      width: width,
-                      height: height,
+                      left,
+                      top,
+                      width,
+                      height,
                       border: ann.type === 'table' ? '3px solid green' : 
                               ann.type === 'image' ? '3px solid blue' : '1px solid red',
                       backgroundColor: ann.type === 'table' ? 'rgba(0,255,0,0.1)' : 
@@ -1143,6 +1325,7 @@ const InteractivePDFViewer = ({ file }) => {
                   </div>
                 )
               })
+              return overlays
             })()}
           </div>
         </div>
@@ -1169,19 +1352,19 @@ const InteractivePDFViewer = ({ file }) => {
           
 
           
-          {/* 调试显示匹配到的块 */}
+          {/* 调试显示匹配到的块 + 关联到“图片几/表格几” */}
           {(() => {
             const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
             let matched = null
             if (selectedArea && selectedText) {
-              matched = matchAnnotation(selectedArea)
+              matched = matchVisualAnnotation(selectedArea) || matchAnnotation(selectedArea)
             } else if (wrapperRect) {
-              matched = matchAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
+              matched = matchVisualAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
             }
             if (matched) {
               return (
                 <div style={{ padding: '6px 12px', fontSize: 12, color: '#6c757d' }}>
-                  关联块: {matched.type} - "{matched.content?.slice(0, 20) || matched.name || 'image'}"
+                  {matched.type === 'image' || matched.type === 'table' ? `关联到：${matched.name || (matched.type === 'table' ? '表格' : '图片')}` : `关联块: 文本`}
                 </div>
               )
             }
@@ -1246,10 +1429,10 @@ const styles = {
     alignItems: 'center',
     padding: '20px',
     maxWidth: '100%',
-    minHeight: '100vh',
+    // 移除minHeight，让容器自然适应内容
     position: 'relative',
     boxSizing: 'border-box',
-    // 防止产生额外滚动空间
+    // 确保没有额外的滚动空间
     overflow: 'visible'
   },
   noFile: {
@@ -1313,16 +1496,17 @@ const styles = {
     position: 'relative',
     border: '1px solid #ddd',
     borderRadius: '8px',
-    overflow: 'hidden',
+    overflow: 'visible',
     boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
     userSelect: 'text',
     WebkitUserSelect: 'text',
     MozUserSelect: 'text',
     msUserSelect: 'text',
     cursor: 'text',
-    // 确保容器紧贴内容，无额外空间
+    // 使用自然布局，避免额外空间
     display: 'inline-block',
-    flexShrink: 0
+    // 移除flexShrink，让内容自然显示
+    margin: '0 auto'
   },
   pageWrapper: {
     position: 'relative'

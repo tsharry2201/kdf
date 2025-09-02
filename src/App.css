@@ -216,8 +216,8 @@
 .react-pdf__Page {
   width: auto !important;
   height: auto !important;
-  max-width: 90% !important;
-  margin: 0 auto 20px auto !important;
+  max-width: 100% !important; /* 放大至容器宽度的100% */
+  margin: 0 auto 12px auto !important;
 }
 
 .react-pdf__Page__canvas {
