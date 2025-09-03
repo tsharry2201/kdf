@@ -14,6 +14,9 @@ const PDFViewer = ({ file }) => {
   const [loadingProgress, setLoadingProgress] = useState(0)
   const [loadingStage, setLoadingStage] = useState('准备中...')
 
+  const [pageScale, setPageScale] = useState(1)
+  const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' })
+
   const onDocumentLoadSuccess = ({ numPages }) => {
     setNumPages(numPages)
     setLoading(false)
@@ -169,29 +172,33 @@ const PDFViewer = ({ file }) => {
   }
 
   const controlsStyle = {
-    margin: '20px 0',
+    margin: '16px 0',
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
     flexWrap: 'wrap',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    transform: 'scale(0.85)', // 缩小UI，不影响PDF内容
+    transformOrigin: 'top center'
   }
 
   const buttonStyle = {
-    padding: '8px 16px',
+    padding: '6px 12px',
     backgroundColor: '#007bff',
     color: 'white',
     border: 'none',
     borderRadius: '4px',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    fontSize: '13px'
   }
 
   const inputStyle = {
-    width: '60px',
-    padding: '5px',
+    width: '56px',
+    padding: '4px',
     textAlign: 'center',
     border: '1px solid #ccc',
-    borderRadius: '4px'
+    borderRadius: '4px',
+    fontSize: '13px'
   }
 
   // 加载界面样式
@@ -355,6 +362,22 @@ const PDFViewer = ({ file }) => {
     height: '100%'
   }
 
+  // 仿照编辑器的页面容器样式（无边框、无阴影、自然宽高）
+  const pageContainerStyle = {
+    position: 'relative',
+    border: 'none',
+    borderRadius: 0,
+    overflow: 'visible',
+    boxShadow: 'none',
+    userSelect: 'text',
+    WebkitUserSelect: 'text',
+    MozUserSelect: 'text',
+    msUserSelect: 'text',
+    cursor: 'text',
+    display: 'inline-block',
+    margin: '0 auto'
+  }
+
   return (
     <div style={containerStyle}>
       {/* 加载UI - 当loading为true时显示 */}
@@ -499,30 +522,57 @@ const PDFViewer = ({ file }) => {
           </button>
         </div>
 
-        <div className="pdf-content">
-          <Document
-            file={file}
-            onLoadSuccess={onDocumentLoadSuccess}
-            onLoadError={onDocumentLoadError}
-            options={documentOptions}
-            loading="正在加载PDF..."
-            error="PDF加载失败"
-          >
-            <Page
-              pageNumber={pageNumber}
-              renderTextLayer={true}
-              renderAnnotationLayer={true}
-              scale={1.2}
-              onLoadSuccess={() => {
-                console.log('页面加载成功')
-              }}
-              onLoadError={(error) => {
-                console.error('页面加载失败:', error)
-                setError('页面渲染失败: ' + error.message)
-                setLoading(false)
-              }}
-            />
-          </Document>
+        <div className="pdf-content" style={{
+          padding: '20px',
+          margin: '0 auto',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
+          maxHeight: 'calc(100vh - 200px)',
+          overflow: 'auto'
+        }}>
+          <div style={{ ...pageContainerStyle, width: contentDimensions.width === 'auto' ? 'auto' : `${contentDimensions.width}px`, maxWidth: '100%' }}>
+            <Document
+              file={file}
+              onLoadSuccess={onDocumentLoadSuccess}
+              onLoadError={onDocumentLoadError}
+              options={documentOptions}
+              loading="正在加载PDF..."
+              error="PDF加载失败"
+            >
+              <Page
+                pageNumber={pageNumber}
+                renderTextLayer={true}
+                renderAnnotationLayer={true}
+                useCropBox={true}
+                scale={pageScale}
+                onLoadSuccess={(page) => {
+                  // 基于CropBox计算缩放，整体略小于编辑器
+                  const viewport = page.getViewport({ scale: 1.0, useCropBox: true })
+                  const pdfWidth = viewport.width
+                  const pdfHeight = viewport.height
+
+                  // 以容器视口估计可用空间，留出左右/上下内边距
+                  const availableWidth = window.innerWidth - 80
+                  const availableHeight = window.innerHeight - 220
+                  const widthScale = availableWidth / pdfWidth
+                  const heightScale = availableHeight / pdfHeight
+                  const optimalScale = Math.min(widthScale, heightScale, 1.6)
+                  const finalScale = Math.min(Math.max(optimalScale * 1.5, 0.5), 2.0)
+
+                  setPageScale(finalScale)
+                  setContentDimensions({
+                    width: Math.round(pdfWidth * finalScale),
+                    height: Math.round(pdfHeight * finalScale)
+                  })
+                }}
+                onLoadError={(error) => {
+                  console.error('页面加载失败:', error)
+                  setError('页面渲染失败: ' + error.message)
+                  setLoading(false)
+                }}
+              />
+            </Document>
+          </div>
         </div>
       </div>
     </div>

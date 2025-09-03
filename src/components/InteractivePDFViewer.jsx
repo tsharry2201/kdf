@@ -29,6 +29,10 @@ const InteractivePDFViewer = ({ file }) => {
   const [showDebugBounds, setShowDebugBounds] = useState(false) // 调试：显示解析块边界
   const [pageScale, setPageScale] = useState(1) // PDF页面缩放比例
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
+  const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean } }
+  const videoRefs = useRef({}) // 保持每个视频的ref
+  const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
+  const attachmentsRef = useRef([])
 
   const pageRef = useRef(null) // 保留：外层容器
   const pageWrapperRef = useRef(null) // 新增：实际页面包裹层（与高亮同层）
@@ -209,6 +213,8 @@ const InteractivePDFViewer = ({ file }) => {
       const isSuccess = Math.random() > 0.3 // 70% 成功率
       
       if (isSuccess) {
+        const isVideo = (uploadedFile.type && uploadedFile.type.startsWith('video/')) || /\.(mp4|webm|ogg|mov|m4v)$/i.test(uploadedFile.name || '')
+        const isImage = (uploadedFile.type && uploadedFile.type.startsWith('image/')) || /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(uploadedFile.name || '')
         const newAttachment = {
           id: `attachment_${Date.now()}`,
           pageNumber,
@@ -220,7 +226,11 @@ const InteractivePDFViewer = ({ file }) => {
           targetType: currentTargetBlock?.type || 'image',
           targetText: currentTargetBlock?.text,
           targetId: currentTargetBlock?.targetId,
-          targetName: currentTargetBlock?.targetName
+          targetName: currentTargetBlock?.targetName,
+          isVideo,
+          isImage,
+          videoUrl: isVideo ? URL.createObjectURL(uploadedFile) : undefined,
+          imageUrl: isImage ? URL.createObjectURL(uploadedFile) : undefined
         }
         
         setAttachments(prev => [...prev, newAttachment])
@@ -250,6 +260,45 @@ const InteractivePDFViewer = ({ file }) => {
     event.target.value = ''
   }
 
+  // 切换视频播放状态
+  const toggleVideoPlay = (attId) => {
+    const el = videoRefs.current[attId]
+    if (!el) return
+    if (el.paused) {
+      // 暂停其它视频
+      Object.entries(videoRefs.current).forEach(([id, v]) => {
+        if (id !== attId && v && !v.paused) v.pause()
+      })
+      el.play()
+      setVideoStates(prev => ({ ...prev, [attId]: { playing: true } }))
+    } else {
+      el.pause()
+      setVideoStates(prev => ({ ...prev, [attId]: { playing: false } }))
+    }
+  }
+
+  // 切换图片铺放模式（cover/contain）
+  const toggleImageFit = (attId) => {
+    setImageStates(prev => ({
+      ...prev,
+      [attId]: { fit: prev[attId]?.fit === 'contain' ? 'cover' : 'contain' }
+    }))
+  }
+
+  // 组件卸载时释放视频URL
+  // 附件引用保存，用于卸载时释放URL
+  useEffect(() => { attachmentsRef.current = attachments }, [attachments])
+  useEffect(() => {
+    return () => {
+      try {
+        (attachmentsRef.current || []).forEach(a => {
+          if (a.videoUrl) URL.revokeObjectURL(a.videoUrl)
+          if (a.imageUrl) URL.revokeObjectURL(a.imageUrl)
+        })
+      } catch (e) { /* noop */ }
+    }
+  }, [])
+
   // 关联图片到当前选择区域 - 已移除，不再需要
   const associateImage = () => {
     // 此功能已移除，不再需要单独的关联图片选项
@@ -259,6 +308,25 @@ const InteractivePDFViewer = ({ file }) => {
   // 移除关联的图片
   const removeAssociatedImage = (imageId) => {
     setAssociatedImages(prev => prev.filter(img => img.id !== imageId))
+  }
+
+  // 删除附件
+  const deleteAttachment = (attachmentId) => {
+    setAttachments(prev => {
+      const att = prev.find(a => a.id === attachmentId)
+      try {
+        if (att?.videoUrl) URL.revokeObjectURL(att.videoUrl)
+        if (att?.imageUrl) URL.revokeObjectURL(att.imageUrl)
+      } catch (e) { /* noop */ }
+      return prev.filter(a => a.id !== attachmentId)
+    })
+    setVideoStates(prev => { const { [attachmentId]: _omit, ...rest } = prev; return rest })
+    setImageStates(prev => { const { [attachmentId]: _omit, ...rest } = prev; return rest })
+  }
+
+  // 隐藏/显示附件
+  const toggleAttachmentVisibility = (attachmentId) => {
+    setAttachments(prev => prev.map(a => a.id === attachmentId ? { ...a, hidden: !a.hidden } : a))
   }
 
   // 确认/取消高亮
@@ -481,7 +549,7 @@ const InteractivePDFViewer = ({ file }) => {
           if (rowGroups.length >= 4) { // 至少4行
             const tableRows = []
             for (let i = 0; i < rowGroups.length; i++) {
-              if (rowGroups[i].length >= 4) { // 每行至少4列
+              if (rowGroups[i].length >= 3) { // 放宽到每行至少3列，兼容表头
                 tableRows.push(rowGroups[i])
               }
             }
@@ -499,19 +567,87 @@ const InteractivePDFViewer = ({ file }) => {
                 const maxX = Math.max(...allItems.map(i => i.x + i.width))
                 const minY = Math.min(...allItems.map(i => i.y))
                 const maxY = Math.max(...allItems.map(i => i.y + i.height))
-                
-                // 为表格创建更大的边距
-                const tablePadding = 30
-                const tableX = Math.max(0, minX - tablePadding)
-                const tableY = Math.max(0, minY - tablePadding)
-                const tableW = Math.min(viewport.width - tableX, maxX - minX + tablePadding * 2)
-                const tableH = Math.min(viewport.height - tableY, maxY - minY + tablePadding * 2)
+
+                // 为表格创建更大的边距，并稍微向上扩展以纳入表头横线
+                const tablePadding = 36
+                let tableX = Math.max(0, minX - tablePadding)
+                let tableY = Math.max(0, minY - tablePadding)
+                let tableW = Math.min(viewport.width - tableX, maxX - minX + tablePadding * 2)
+                let tableH = Math.min(viewport.height - tableY, maxY - minY + tablePadding * 2)
+                // 基于行距的自适应外延：尽量包含上下边框
+                const rowTops = tableRows.map(r => Math.min(...r.map(i => i.y))).sort((a,b)=>a-b)
+                const gaps = []
+                for (let k=1;k<rowTops.length;k++){ gaps.push(Math.abs(rowTops[k]-rowTops[k-1])) }
+                const median = (arr)=>{ if(arr.length===0) return 0; const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2 }
+                const g = median(gaps) || 18
+                const extendTop = Math.min(24, g)
+                const extendBottom = Math.min(18, Math.round(g*0.6))
+                tableY = Math.max(0, tableY - extendTop)
+                tableH = Math.min(viewport.height - tableY, tableH + extendTop + extendBottom)
+
+                // 分栏适配：判断是否位于左右某一栏
+                let adjX = tableX
+                let adjW = tableW
+                let span = 'full'
+                if (typeof colLayout !== 'undefined' && colLayout.type === 'double') {
+                  const center = tableX + tableW / 2
+                  const belongsRight = center > (colLayout.boundary || viewport.width / 2)
+                  const [minXCol, maxXCol] = belongsRight ? colLayout.columns[1] : colLayout.columns[0]
+                  const colW = Math.max(60, maxXCol - minXCol)
+                  // 如果表格宽度与某列宽度相近，则认为是半页表
+                  if (Math.abs(tableW - colW) < viewport.width * 0.12 || tableW < colW * 1.25) {
+                    adjX = Math.max(0, minXCol - 10)
+                    adjW = Math.min(viewport.width - adjX, colW + 20)
+                    span = 'half'
+                  }
+                }
                 
                 // 转成容器像素坐标
-                const pxX = offsetX + tableX * pageScale
-                const pxY = offsetY + tableY * pageScale
-                const pxW = tableW * pageScale
-                const pxH = tableH * pageScale
+                let pxX = offsetX + adjX * pageScale
+                let pxY = offsetY + tableY * pageScale
+                let pxW = adjW * pageScale
+                let pxH = tableH * pageScale
+
+                // 裁剪底部：若下方近邻存在以 Table/表 开头的说明行，则将底边裁到其上方
+                const toPdfYLocal = (py) => (py - offsetY) / pageScale
+                const toPdfXLocal = (px) => (px - offsetX) / pageScale
+                const rTopPdf = toPdfYLocal(pxY)
+                const rBottomPdf = toPdfYLocal(pxY + pxH)
+                const rLeftPdf = toPdfXLocal(pxX)
+                const rRightPdf = toPdfXLocal(pxX + pxW)
+                const linesLocal = (() => {
+                  const items = [...textItems].sort((a,b)=>a.y-b.y||a.x-b.x)
+                  const lines = []
+                  const yTol = 8
+                  let cur = []
+                  items.forEach(t=>{
+                    if (cur.length===0) cur=[t]
+                    else { const ay = cur.reduce((s,i)=>s+i.y,0)/cur.length; if (Math.abs(t.y-ay)<=yTol) cur.push(t); else {lines.push(cur); cur=[t]} }
+                  })
+                  if (cur.length) lines.push(cur)
+                  return lines.map(items=>({ text: items.map(i=>i.content).join(''), x: Math.min(...items.map(i=>i.x)), y: Math.min(...items.map(i=>i.y)), width: Math.max(...items.map(i=>i.x+i.width)) - Math.min(...items.map(i=>i.x)), height: Math.max(...items.map(i=>i.height)) }))
+                })()
+                const tableRegex = /^\s*(Table|表)\s*\d+\s*[:：\.]?/i
+                const cap = linesLocal.filter(l=>tableRegex.test(l.text))
+                  .filter(l=> l.y >= rTopPdf && l.y <= rBottomPdf + viewport.height*0.25)
+                  .filter(l=> !(l.x + l.width < rLeftPdf || l.x > rRightPdf))
+                  .sort((a,b)=>a.y-b.y)
+                  .reduce((best,l)=>{ if(!best) return l; return (Math.abs(l.y - rBottomPdf) < Math.abs(best.y - rBottomPdf)) ? l : best }, null)
+                if (cap) {
+                  const capTopPx = offsetY + cap.y * pageScale
+                  pxH = Math.max(20, Math.min(pxH, capTopPx - pxY - 10))
+                } else {
+                  // 兜底：检测底部附近较长文本行，裁到其上方
+                  const nearText = linesLocal
+                    .filter(l => l.y >= rBottomPdf - viewport.height * 0.04 && l.y <= rBottomPdf + viewport.height * 0.25)
+                    .filter(l => (l.text || '').trim().replace(/\s+/g,' ').length >= 16)
+                    .filter(l => { const lx1=l.x,lx2=l.x+l.width; return !(lx2 < rLeftPdf || lx1 > rRightPdf) })
+                    .sort((a,b)=>a.y-b.y)[0]
+                  if (nearText) {
+                    const tTopPx = offsetY + nearText.y * pageScale
+                    pxH = Math.max(20, Math.min(pxH, tTopPx - pxY - 8))
+                  }
+                }
                 tables.push({
                   id: `table_${pageNumber}_0`,
                   type: 'table',
@@ -523,7 +659,8 @@ const InteractivePDFViewer = ({ file }) => {
                   },
                   content: `表格区域 (${tableRows.length}行 x ${Math.max(...tableRows.map(r => r.length))}列)`,
                   rows: tableRows.length,
-                  cols: Math.max(...tableRows.map(r => r.length))
+                  cols: Math.max(...tableRows.map(r => r.length)),
+                  span
                 })
               }
             }
@@ -541,6 +678,42 @@ const InteractivePDFViewer = ({ file }) => {
             let imageCount = 0
             let currentTransform = [1, 0, 0, 1, 0, 0]
             const transformStack = []
+            // 追踪当前填充色，辅助识别“实心色块”（更稳）
+            let currentFill = { space: 'unknown', value: [] }
+            const fillStack = []
+            // 暂存 constructPath 中的矩形，待遇到 fill/stroke 时确认
+            let pendingRects = []
+            
+            // 简易IoU（局部使用，避免与下方全局工具耦合）
+            const localIoU = (A, B) => {
+              const ax2 = A.position.x + A.position.width
+              const ay2 = A.position.y + A.position.height
+              const bx2 = B.position.x + B.position.width
+              const by2 = B.position.y + B.position.height
+              const x1 = Math.max(A.position.x, B.position.x)
+              const y1 = Math.max(A.position.y, B.position.y)
+              const x2 = Math.min(ax2, bx2)
+              const y2 = Math.min(ay2, by2)
+              const w = Math.max(0, x2 - x1)
+              const h = Math.max(0, y2 - y1)
+              const inter = w * h
+              const union = A.position.width * A.position.height + B.position.width * B.position.height - inter
+              return union > 0 ? inter / union : 0
+            }
+            
+            // 计算区域内文本覆盖度，帮助排除正文背景/大框
+            const textCoverRatioInPxRect = (rx, ry, rw, rh) => {
+              const items = textItems.filter(t => {
+                const tx = t.x * pageScale + offsetX
+                const ty = t.y * pageScale + offsetY
+                const tw = (t.width || 0) * pageScale
+                const th = Math.max(10, (t.height || 10) * pageScale)
+                return tx + tw > rx && tx < rx + rw && ty + th > ry && ty < ry + rh
+              })
+              const cover = items.reduce((s, t) => s + Math.max(1, t.width) * Math.max(10, t.height), 0) * (pageScale * pageScale)
+              const area = Math.max(1, rw * rh)
+              return cover / area
+            }
           
           for (let i = 0; i < operatorList.fnArray.length; i++) {
             const op = operatorList.fnArray[i]
@@ -548,9 +721,12 @@ const InteractivePDFViewer = ({ file }) => {
             
             if (op === pdfjs.OPS.save) {
               transformStack.push([...currentTransform])
+              fillStack.push({ ...currentFill })
             } else if (op === pdfjs.OPS.restore) {
               const restored = transformStack.pop()
               if (restored) currentTransform = restored
+              const f = fillStack.pop()
+              if (f) currentFill = f
             } else if (op === pdfjs.OPS.transform) {
               const [a2, b2, c2, d2, e2, f2] = args
               const [a1, b1, c1, d1, e1, f1] = currentTransform
@@ -565,6 +741,138 @@ const InteractivePDFViewer = ({ file }) => {
             } else if (op === pdfjs.OPS.setTransform) {
               const [a, b, c, d, e, f] = args
               currentTransform = [a, b, c, d, e, f]
+            } else if (typeof pdfjs.OPS.setFillRGBColor !== 'undefined' && op === pdfjs.OPS.setFillRGBColor) {
+              currentFill = { space: 'rgb', value: args }
+            } else if (typeof pdfjs.OPS.setFillGray !== 'undefined' && op === pdfjs.OPS.setFillGray) {
+              currentFill = { space: 'gray', value: args }
+            } else if (typeof pdfjs.OPS.setFillCMYKColor !== 'undefined' && op === pdfjs.OPS.setFillCMYKColor) {
+              currentFill = { space: 'cmyk', value: args }
+            } else if (op === pdfjs.OPS.constructPath) {
+              // 捕捉 constructPath 中的 rectangle；先暂存，待遇到填充/描边时确认
+              try {
+                const opsArr = Array.isArray(args?.[0]) ? args[0] : null
+                const coordsArr = Array.isArray(args?.[1]) ? args[1] : null
+                if (opsArr && coordsArr) {
+                  const RECT = pdfjs.OPS.rectangle
+                  const MOVE = pdfjs.OPS.moveTo
+                  const LINE = pdfjs.OPS.lineTo
+                  const CURV = pdfjs.OPS.curveTo
+                  const CURV2 = pdfjs.OPS.curveTo2
+                  const CURV3 = pdfjs.OPS.curveTo3
+                  const CLOSE = pdfjs.OPS.closePath
+                  // 每个操作的参数个数（其他类型不关心，仅推进下标）
+                  const argCount = (k) => (k === RECT ? 4 : k === MOVE || k === LINE ? 2 : k === CURV ? 6 : (CURV2 && k === CURV2) || (CURV3 && k === CURV3) ? 4 : 0)
+                  let p = 0
+                  let sub = [] // 当前子路径点（未变换，PDF坐标）
+                  const [a, b, c, d, e, f] = currentTransform
+                  const apply = (px, py) => ({ x: a * px + c * py + e, y: b * px + d * py + f })
+                  const toPxRect = (minX, minY, maxX, maxY) => {
+                    let rx = offsetX + minX * pageScale
+                    let ry = offsetY + (viewport.height - maxY) * pageScale
+                    let rw = Math.abs((maxX - minX) * pageScale)
+                    let rh = Math.abs((maxY - minY) * pageScale)
+                    return { x: rx, y: ry, w: rw, h: rh }
+                  }
+                  const pushRectIfValid = (minX, minY, maxX, maxY) => {
+                    const r = toPxRect(minX, minY, maxX, maxY)
+                    if (r.w >= 20 && r.h >= 20) pendingRects.push(r)
+                  }
+                  const tryAxisAlignedRect = (pts /* transformed to CropBox space */) => {
+                    if (pts.length < 4) return
+                    const xs = pts.map(p0 => p0.x)
+                    const ys = pts.map(p0 => p0.y)
+                    const minX = Math.min(...xs), maxX = Math.max(...xs)
+                    const minY = Math.min(...ys), maxY = Math.max(...ys)
+                    const eps = 1e-3
+                    const ok = pts.every(p0 => (Math.abs(p0.x - minX) < eps || Math.abs(p0.x - maxX) < eps) && (Math.abs(p0.y - minY) < eps || Math.abs(p0.y - maxY) < eps))
+                    if (ok) pushRectIfValid(minX, minY, maxX, maxY)
+                  }
+                  for (let oi = 0; oi < opsArr.length; oi++) {
+                    const kind = opsArr[oi]
+                    const n = argCount(kind)
+                    if (kind === RECT && p + 3 < coordsArr.length) {
+                      const x = coordsArr[p]
+                      const y = coordsArr[p + 1]
+                      const w = coordsArr[p + 2]
+                      const h = coordsArr[p + 3]
+                      const pts = [apply(x, y), apply(x + w, y), apply(x + w, y + h), apply(x, y + h)]
+                      const cropPts = pts.map(p0 => ({ x: p0.x - cropOffsetX, y: p0.y - cropOffsetY }))
+                      const minX = Math.min(...cropPts.map(p0 => p0.x))
+                      const maxX = Math.max(...cropPts.map(p0 => p0.x))
+                      const minY = Math.min(...cropPts.map(p0 => p0.y))
+                      const maxY = Math.max(...cropPts.map(p0 => p0.y))
+                      pushRectIfValid(minX, minY, maxX, maxY)
+                    } else if ((kind === MOVE || kind === LINE) && p + 1 < coordsArr.length) {
+                      const x = coordsArr[p]
+                      const y = coordsArr[p + 1]
+                      // 转换到 CropBox 空间的点
+                      const pt = apply(x, y)
+                      sub.push({ x: pt.x - cropOffsetX, y: pt.y - cropOffsetY })
+                    } else if (kind === CLOSE) {
+                      // 尝试把当前子路径识别为矩形
+                      tryAxisAlignedRect(sub)
+                      sub = []
+                    }
+                    p += Math.max(0, n)
+                  }
+                }
+              } catch (e) {
+                console.warn('解析constructPath(暂存矩形)失败:', e)
+              }
+            }
+
+            // 确认 pending 矩形（遇到绘制时）
+            const confirmPending = (mode /* 'fill' | 'stroke' */) => {
+              if (!pendingRects.length) return
+              for (const pr of pendingRects) {
+                const rw = pr.w, rh = pr.h
+                if (rw < 30 || rh < 30) continue
+                if (rw / rh < 0.05 || rh / rw < 0.05) continue
+                const cover = textCoverRatioInPxRect(pr.x, pr.y, pr.w, pr.h)
+                // 填充矩形通常为纯色占位，允许较低/中等文本覆盖；描边矩形倾向于空心框
+                const threshold = mode === 'fill' ? 0.35 : 0.25
+                if (cover <= threshold) {
+                  const candidate = {
+                    id: `vector_rect_${pageNumber}_${imageCount}`,
+                    type: 'image',
+                    position: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.w), height: Math.round(pr.h) },
+                    content: '矩形占位',
+                    description: mode === 'fill' ? '填充矩形占位' : '描边矩形占位',
+                    fill: mode === 'fill' ? currentFill : undefined
+                  }
+                  const dup = images.some(img => localIoU(img, candidate) > 0.7)
+                  if (!dup) {
+                    images.push(candidate)
+                    imageCount++
+                  }
+                }
+              }
+              pendingRects = []
+            }
+
+            // 根据绘制/裁剪操作确认或丢弃 pending 矩形
+            if (
+              op === pdfjs.OPS.fill ||
+              op === pdfjs.OPS.fillStroke ||
+              (typeof pdfjs.OPS.eoFill !== 'undefined' && op === pdfjs.OPS.eoFill) ||
+              (typeof pdfjs.OPS.eoFillStroke !== 'undefined' && op === pdfjs.OPS.eoFillStroke) ||
+              (typeof pdfjs.OPS.closeFillStroke !== 'undefined' && op === pdfjs.OPS.closeFillStroke)
+            ) {
+              confirmPending('fill')
+            }
+            if (
+              op === pdfjs.OPS.stroke ||
+              (typeof pdfjs.OPS.closeStroke !== 'undefined' && op === pdfjs.OPS.closeStroke)
+            ) {
+              confirmPending('stroke')
+            }
+            if (
+              (typeof pdfjs.OPS.clip !== 'undefined' && op === pdfjs.OPS.clip) ||
+              (typeof pdfjs.OPS.eoClip !== 'undefined' && op === pdfjs.OPS.eoClip) ||
+              (typeof pdfjs.OPS.endPath !== 'undefined' && op === pdfjs.OPS.endPath)
+            ) {
+              // 被用于裁剪或明确结束不绘制
+              pendingRects = []
             }
             
             if (
@@ -707,6 +1015,31 @@ const InteractivePDFViewer = ({ file }) => {
             })
 
             const bandArea = pageW * bandH
+            // 检测页面列布局（单栏/双栏）
+            const detectColumnLayout = () => {
+              const xs = textItems.map(t => t.x).sort((a, b) => a - b)
+              if (xs.length < 20) return { type: 'single' }
+              // 找最大间隔作为左右分栏粗略分割
+              let maxGap = 0, gapIdx = -1
+              for (let i = 1; i < xs.length; i++) {
+                const g = xs[i] - xs[i - 1]
+                if (g > maxGap) { maxGap = g; gapIdx = i }
+              }
+              if (maxGap < viewport.width * 0.12) return { type: 'single' }
+              const boundary = (xs[gapIdx] + xs[gapIdx - 1]) / 2
+              const left = textItems.filter(t => t.x < boundary)
+              const right = textItems.filter(t => t.x >= boundary)
+              if (left.length < textItems.length * 0.25 || right.length < textItems.length * 0.25) {
+                return { type: 'single' }
+              }
+              const leftMin = Math.min(...left.map(t => t.x))
+              const leftMax = Math.max(...left.map(t => t.x + t.width))
+              const rightMin = Math.min(...right.map(t => t.x))
+              const rightMax = Math.max(...right.map(t => t.x + t.width))
+              return { type: 'double', boundary, columns: [ [leftMin, leftMax], [rightMin, rightMax] ] }
+            }
+            const colLayout = detectColumnLayout()
+
             // 将文本按行聚合，便于识别 “Figure/Table N” 标题
             const lines = []
             const sorted = [...textItems].sort((a, b) => a.y - b.y || a.x - b.x)
@@ -730,23 +1063,55 @@ const InteractivePDFViewer = ({ file }) => {
               height: Math.max(...items.map(i => i.height))
             }))
 
-            const figureLines = lineObjs.filter(l => /(Figure|Fig\.)\s*\d+/i.test(l.text))
-            const tableLines = lineObjs.filter(l => /(Table)\s*\d+/i.test(l.text))
+            // 标题识别：要求行首匹配，避免段落中的“In Figure 1 ...”
+            const figureLines = lineObjs.filter(l => /^\s*(Figure|Fig\.?|图表|图)\s*[:：]?\s*\d+/i.test(l.text))
+            const tableLines = lineObjs.filter(l => /^\s*(Table|表)\s*[:：]?\s*\d+/i.test(l.text))
+
+            // 辅助：统计候选区域内的文本密度和网格感
+            const analyzeTextArea = (pxX, pxY, pxW, pxH) => {
+              const items = textItems.filter(t => {
+                const tx = t.x * pageScale + offsetX
+                const ty = t.y * pageScale + offsetY
+                const tw = (t.width || 0) * pageScale
+                const th = Math.max(10, (t.height || 10) * pageScale)
+                return tx + tw > pxX && tx < pxX + pxW && ty + th > pxY && ty < pxY + pxH
+              })
+              const cover = items.reduce((s, t) => s + Math.max(1, t.width) * Math.max(10, t.height), 0) * (pageScale * pageScale)
+              const area = Math.max(1, pxW * pxH)
+              // 行列数（粗糙聚类）
+              const ys = items.map(i => i.y * pageScale + offsetY).sort((a, b) => a - b)
+              let rows = 0
+              for (let i = 0; i < ys.length; ) {
+                const base = ys[i]
+                let j = i + 1
+                while (j < ys.length && Math.abs(ys[j] - base) < 14) j++
+                rows++; i = j
+              }
+              const xs = items.map(i => i.x * pageScale + offsetX).sort((a, b) => a - b)
+              let cols = 0
+              for (let i = 0; i < xs.length; ) {
+                const base = xs[i]
+                let j = i + 1
+                while (j < xs.length && Math.abs(xs[j] - base) < 24) j++
+                cols++; i = j
+              }
+              return { textCoverRatio: cover / area, rows, cols, count: items.length }
+            }
 
             const addBlockAboveCaption = (cap, kind, idxBase) => {
               // 在包含 Figure/Table 的标题附近做“窄范围”搜索，减少过大框
               const capBand = Math.max(0, Math.floor(cap.y / bandH))
-              const searchUp = Math.floor((pageH * 0.35) / bandH) // 向上最多搜 35% 页高
+              const searchUp = Math.floor((pageH * 0.45) / bandH) // 向上最多搜 45% 页高，适配无边框图
               const startBand = Math.max(0, capBand - searchUp)
 
-              // 从标题向上，找到一段低密度带；遇到明显高密度(>0.22)则截止，避免跨到正文
+              // 从标题向上，找到一段相对低密度带；遇到明显高密度则截止，避免跨到正文
               let b0 = -1, b1 = -1
               for (let b = capBand - 1; b >= startBand; b--) {
                 const ratio = bandCover[b] / (bandArea || 1)
-                if (ratio < 0.12) {
+                if (ratio < 0.18) { // 提高阈值，容忍图内少量文字（坐标轴、标注）
                   if (b1 === -1) b1 = b
                   b0 = b
-                } else if (ratio > 0.22) {
+                } else if (ratio > 0.35) { // 更高阈值判定“正文密集”
                   // 碰到较高密度说明到了正文，停止
                   if (b0 !== -1) break
                   else break
@@ -755,17 +1120,47 @@ const InteractivePDFViewer = ({ file }) => {
                   break
                 }
               }
-              if (b0 === -1 || b1 === -1) return
+
+              // 若未检出明显低密度段，使用基于标题的保守上方窗口作为候选
+              if (b0 === -1 || b1 === -1) {
+                const fallbackHeight = Math.min(pageH * 0.28, Math.max(120, cap.width * 0.9))
+                const yMaxFB = Math.max(0, cap.y - 6)
+                const yMinFB = Math.max(0, yMaxFB - fallbackHeight)
+                b0 = Math.floor(yMinFB / bandH)
+                b1 = Math.max(b0, Math.floor(yMaxFB / bandH))
+              }
 
               const yMin = b0 * bandH
               const yMax = (b1 + 1) * bandH
               let boxH = yMax - yMin - 8
               if (boxH < 60) return
 
-              // 利用标题的宽度近似图/表宽度，左右各加少量 padding
-              const padX = Math.min(24, cap.width * 0.08)
-              let x = Math.max(margin, cap.x - padX)
-              let w = Math.min(pageW - x - margin, cap.width + padX * 2)
+              // 基于标题所在列估计宽度：优先使用页面分栏信息
+              let x = null
+              let w = null
+              if (colLayout.type === 'double') {
+                const belongsRight = cap.x > (colLayout.boundary || pageW/2)
+                const [minXCol, maxXCol] = belongsRight ? colLayout.columns[1] : colLayout.columns[0]
+                x = Math.max(margin, minXCol)
+                w = Math.min(pageW - x - margin, maxXCol - minXCol)
+              } else {
+                // 单栏：使用上方文本的横向范围
+                const colYTop = yMin + 4
+                const colYBottom = Math.max(yMin + 20, Math.min(yMax, cap.y - 8))
+                const sameColLines = lineObjs.filter(l => l.y >= colYTop && l.y <= colYBottom)
+                if (sameColLines.length >= 2) {
+                  const minX = Math.min(...sameColLines.map(l => l.x))
+                  const maxX = Math.max(...sameColLines.map(l => l.x + l.width))
+                  x = Math.max(margin, minX)
+                  w = Math.min(pageW - x - margin, maxX - minX)
+                }
+              }
+              if (x === null || w === null || w < 60) {
+                // 回退：以标题宽度为近似，并放宽左右 padding
+                const padX = Math.min(40, cap.width * 0.15)
+                x = Math.max(margin, cap.x - padX)
+                w = Math.min(pageW - x - margin, cap.width + padX * 2)
+              }
 
               // 限制最大高度，避免出现跨越过高的框
               const maxH = Math.min(pageH * 0.55, cap.width * 0.9)
@@ -777,20 +1172,23 @@ const InteractivePDFViewer = ({ file }) => {
               const pxY = offsetY + Math.max(0, yMin + 5) * pageScale
               const pxH = Math.max(60, boxH * pageScale)
 
-              // 过滤：区域内存在少量元素（对图形：坐标轴/刻度文本；对表格：表头文本）
-              const textInside = textItems.some(t => {
-                const tx = t.x * pageScale + offsetX
-                const ty = t.y * pageScale + offsetY
-                return tx >= pxX && tx <= pxX + pxW && ty >= pxY && ty <= pxY + pxH
-              })
-              if (!textInside && kind === 'table') return // 表格必须包含少量文本
+              // 基于文本密度/网格的约束
+              const { textCoverRatio, rows, cols } = analyzeTextArea(pxX, pxY, pxW, pxH)
+              if (kind === 'image') {
+                // 图片区域应为较低文本密度；对矢量图（含坐标轴/文字）放宽阈值
+                if (textCoverRatio > 0.35 || rows >= 12) return
+              } else if (kind === 'table') {
+                // 表格：需要网格感（多行多列）
+                const gridLike = rows >= 3 && cols >= 2
+                if (!gridLike) return
+              }
 
               images.push({
                 id: `${kind}_caption_${pageNumber}_${idxBase}`,
                 type: kind === 'table' ? 'table' : 'image',
                 position: { x: Math.round(pxX), y: Math.round(pxY), width: Math.round(pxW), height: Math.round(pxH) },
                 content: `${kind} caption block`,
-                description: '基于标题与低文本密度的候选块（收紧为标题宽度附近）'
+                description: '基于标题→上方窗口与稀疏度的候选块（无边框增强）'
               })
             }
 
@@ -806,6 +1204,418 @@ const InteractivePDFViewer = ({ file }) => {
         // 执行检测
         let tables = detectTables(textItems)
         let images = await detectImages()
+
+        // 汇总图片块：将同一列内大量小图合并成整体块，双栏最多两个
+        const summarizeImages = (imgs) => {
+          if (!imgs || imgs.length === 0) return []
+          // 复制，避免原数组被改动
+          let rectsAll = imgs.map(it => ({ ...it, position: { ...it.position } }))
+          // 仅以真正的图片绘制框作为合并基线，排除基于标题推断的 image_caption_* 大块
+          const baseRects = rectsAll.filter(r => !(typeof r.id === 'string' && r.id.startsWith('image_caption_')))
+          let rects = baseRects.length > 0 ? baseRects : rectsAll
+
+          // 简易分栏检测（与上方逻辑一致）
+          const xs = textItems.map(t => t.x).sort((a, b) => a - b)
+          let layout = { type: 'single' }
+          if (xs.length > 20) {
+            let maxGap = 0, gapIdx = -1
+            for (let i = 1; i < xs.length; i++) {
+              const g = xs[i] - xs[i - 1]
+              if (g > maxGap) { maxGap = g; gapIdx = i }
+            }
+            if (maxGap >= viewport.width * 0.12) {
+              const boundary = (xs[gapIdx] + xs[gapIdx - 1]) / 2
+              const left = textItems.filter(t => t.x < boundary)
+              const right = textItems.filter(t => t.x >= boundary)
+              if (left.length >= textItems.length * 0.25 && right.length >= textItems.length * 0.25) {
+                const leftMin = Math.min(...left.map(t => t.x))
+                const leftMax = Math.max(...left.map(t => t.x + t.width))
+                const rightMin = Math.min(...right.map(t => t.x))
+                const rightMax = Math.max(...right.map(t => t.x + t.width))
+                layout = { type: 'double', boundary, columns: [[leftMin, leftMax], [rightMin, rightMax]] }
+              }
+            }
+          }
+
+          // 分栏边界（像素坐标）
+          const boundaryPx = layout.type === 'double' ? (offsetX + layout.boundary * pageScale) : null
+          const leftColPx = layout.type === 'double' ? [offsetX + layout.columns[0][0] * pageScale, offsetX + layout.columns[0][1] * pageScale] : null
+          const rightColPx = layout.type === 'double' ? [offsetX + layout.columns[1][0] * pageScale, offsetX + layout.columns[1][1] * pageScale] : null
+
+          // 工具：两矩形是否应合并（重叠或很近）；双栏下禁止跨列合并
+          const shouldMerge = (a, b) => {
+            const ax2 = a.position.x + a.position.width
+            const ay2 = a.position.y + a.position.height
+            const bx2 = b.position.x + b.position.width
+            const by2 = b.position.y + b.position.height
+            const overlapX = Math.max(0, Math.min(ax2, b.position.x) - Math.max(a.position.x, b.position.x))
+            const overlapY = Math.max(0, Math.min(ay2, b.position.y) - Math.max(a.position.y, b.position.y))
+            const inter = overlapX * overlapY
+            const areaA = a.position.width * a.position.height
+            const areaB = b.position.width * b.position.height
+            const iou = inter / (areaA + areaB - inter + 1e-6)
+            // 接近判定：边距小于阈值且在同一带
+            const gapX = Math.max(0, Math.max(a.position.x, b.position.x) - Math.min(ax2, bx2))
+            const gapY = Math.max(0, Math.max(a.position.y, b.position.y) - Math.min(ay2, by2))
+            const nearX = gapX < 24
+            const nearY = gapY < 24
+            // 双栏：若中心点分属不同列，则不合并
+            if (layout.type === 'double' && boundaryPx !== null) {
+              const aCenter = a.position.x + a.position.width / 2
+              const bCenter = b.position.x + b.position.width / 2
+              const guard = 16
+              const aSide = aCenter < boundaryPx - guard ? 'L' : (aCenter > boundaryPx + guard ? 'R' : 'M')
+              const bSide = bCenter < boundaryPx - guard ? 'L' : (bCenter > boundaryPx + guard ? 'R' : 'M')
+              if (aSide !== 'M' && bSide !== 'M' && aSide !== bSide) return false
+              // 如果落在中缝附近，按照与列区间的重叠更多的一侧决定；若不同侧则仍不合并
+              if (aSide === 'M' || bSide === 'M') {
+                const overlapWith = (r, colPx) => {
+                  const x1 = Math.max(r.position.x, colPx[0])
+                  const x2 = Math.min(r.position.x + r.position.width, colPx[1])
+                  return Math.max(0, x2 - x1)
+                }
+                const aOverlapL = leftColPx ? overlapWith(a, leftColPx) : 0
+                const aOverlapR = rightColPx ? overlapWith(a, rightColPx) : 0
+                const bOverlapL = leftColPx ? overlapWith(b, leftColPx) : 0
+                const bOverlapR = rightColPx ? overlapWith(b, rightColPx) : 0
+                const aSide2 = aOverlapL >= aOverlapR ? 'L' : 'R'
+                const bSide2 = bOverlapL >= bOverlapR ? 'L' : 'R'
+                if (aSide2 !== bSide2) return false
+              }
+            }
+            return iou > 0.05 || (nearX && overlapY > 10) || (nearY && overlapX > 10)
+          }
+
+          const unionRect = (a, b) => ({
+            ...a,
+            id: `${a.id}_u_${b.id}`,
+            position: {
+              x: Math.min(a.position.x, b.position.x),
+              y: Math.min(a.position.y, b.position.y),
+              width: Math.max(a.position.x + a.position.width, b.position.x + b.position.width) - Math.min(a.position.x, b.position.x),
+              height: Math.max(a.position.y + a.position.height, b.position.y + b.position.height) - Math.min(a.position.y, b.position.y)
+            }
+          })
+
+          // 迭代合并直到稳定
+          const mergeIter = (list) => {
+            let merged = []
+            const used = new Array(list.length).fill(false)
+            for (let i = 0; i < list.length; i++) {
+              if (used[i]) continue
+              let cur = list[i]
+              for (let j = i + 1; j < list.length; j++) {
+                if (used[j]) continue
+                if (shouldMerge(cur, list[j])) {
+                  cur = unionRect(cur, list[j])
+                  used[j] = true
+                }
+              }
+              merged.push(cur)
+            }
+            return merged
+          }
+
+          let mergedRects = rects
+
+          if (layout.type === 'double') {
+            // 先按列拆分，再分别合并，绝不跨列
+            const guard = 16
+            const left = rects.filter(r => (r.position.x + r.position.width/2) < (boundaryPx - guard))
+            const right = rects.filter(r => (r.position.x + r.position.width/2) > (boundaryPx + guard))
+            const middle = rects.filter(r => (r.position.x + r.position.width/2) >= (boundaryPx - guard) && (r.position.x + r.position.width/2) <= (boundaryPx + guard))
+            // 将中缝的块按与列重叠更多的一侧分配
+            const overlapWith = (r, colPx) => {
+              const x1 = Math.max(r.position.x, colPx[0])
+              const x2 = Math.min(r.position.x + r.position.width, colPx[1])
+              return Math.max(0, x2 - x1)
+            }
+            middle.forEach(r => {
+              const ol = leftColPx ? overlapWith(r, leftColPx) : 0
+              const or = rightColPx ? overlapWith(r, rightColPx) : 0
+              if (ol >= or) left.push(r); else right.push(r)
+            })
+
+            const mergeSide = (arr) => {
+              let cur = arr
+              for (let iter = 0; iter < 3; iter++) {
+                const next = mergeIter(cur)
+                if (next.length === cur.length) { cur = next; break }
+                cur = next
+              }
+              return cur
+            }
+
+            const L = mergeSide(left)
+            const R = mergeSide(right)
+            // 不再把每一列折叠为一个大框，保留列内的独立块
+            mergedRects = [...L, ...R]
+          } else if (mergedRects.length > 1) {
+            // 单栏：仅基于接近/重叠进行迭代合并，避免把上下两个图合并成整列
+            let cur = mergedRects
+            for (let iter = 0; iter < 3; iter++) {
+              const next = mergeIter(cur)
+              if (next.length === cur.length) { cur = next; break }
+              cur = next
+            }
+            mergedRects = cur
+          }
+
+          // 限制最多两个，按面积取前2
+          if (mergedRects.length > 2) {
+            mergedRects = mergedRects
+              .sort((a, b) => (b.position.width * b.position.height) - (a.position.width * a.position.height))
+              .slice(0, 2)
+          }
+
+          // 紧凑化：以组内的基础小图（rects）重新计算紧边界，并排除下方的 Figure/图 caption 行
+          const toPdfY = (py) => (py - offsetY) / pageScale
+          const toPdfX = (px) => (px - offsetX) / pageScale
+
+          // 重新按 y 聚类得到文本行，供 caption 检测
+          const makeLines = () => {
+            const items = [...textItems].sort((a,b)=>a.y-b.y||a.x-b.x)
+            const lines = []
+            const yTol = 8
+            let cur = []
+            items.forEach(t=>{
+              if (cur.length===0) cur=[t]
+              else {
+                const avgY = cur.reduce((s,i)=>s+i.y,0)/cur.length
+                if (Math.abs(t.y-avgY)<=yTol) cur.push(t)
+                else { lines.push(cur); cur=[t] }
+              }
+            })
+            if (cur.length) lines.push(cur)
+            return lines.map(items=>({
+              text: items.map(i=>i.content).join(''),
+              x: Math.min(...items.map(i=>i.x)),
+              y: Math.min(...items.map(i=>i.y)),
+              width: Math.max(...items.map(i=>i.x+i.width)) - Math.min(...items.map(i=>i.x)),
+              height: Math.max(...items.map(i=>i.height))
+            }))
+          }
+          const lineObjsLocal = makeLines()
+
+          const tightened = mergedRects.map(r => {
+            // 使用参与合并的基础小图来收紧
+            const members = rects.filter(s => {
+              const cx = s.position.x + s.position.width/2
+              const cy = s.position.y + s.position.height/2
+              return cx >= r.position.x-4 && cx <= r.position.x + r.position.width + 4 &&
+                     cy >= r.position.y-4 && cy <= r.position.y + r.position.height + 4
+            })
+            if (members.length>0) {
+              const minX = Math.min(...members.map(m=>m.position.x))
+              const minY = Math.min(...members.map(m=>m.position.y))
+              const maxX = Math.max(...members.map(m=>m.position.x+m.position.width))
+              const maxY = Math.max(...members.map(m=>m.position.y+m.position.height))
+              r.position.x = minX
+              r.position.y = minY
+              r.position.width = maxX - minX
+              r.position.height = maxY - minY
+            }
+
+            // 排除“Figure/图 …” caption 行：在 r 内部靠近底部或其正下方查找最近的标题行，将底边裁剪到其上方
+            const rTopPdf = toPdfY(r.position.y)
+            const rBottomPdf = toPdfY(r.position.y + r.position.height)
+            const rLeftPdf = toPdfX(r.position.x)
+            const rRightPdf = toPdfX(r.position.x + r.position.width)
+            const figureRegex = /^\s*(Figure|Fig\.?|图)\s*\d+\s*[:：\.]?/i
+            const cand = lineObjsLocal
+              .filter(l => figureRegex.test(l.text))
+              // 允许在框内靠近底部，或底部以下 25% 页高
+              .filter(l => l.y >= rTopPdf && l.y <= rBottomPdf + viewport.height * 0.25)
+              .filter(l => {
+                const lx1 = l.x, lx2 = l.x + l.width
+                // 与组在横向上有重叠
+                return !(lx2 < rLeftPdf || lx1 > rRightPdf)
+              })
+              .sort((a,b)=>a.y-b.y)
+              // 选取离底部最近的一行
+              .reduce((best,l)=>{
+                if(!best) return l
+                return (Math.abs(l.y - rBottomPdf) < Math.abs(best.y - rBottomPdf)) ? l : best
+              }, null)
+            let capTopPx = null
+            if (cand) {
+              capTopPx = offsetY + cand.y * pageScale
+              const newH = Math.max(10, Math.min(r.position.height, capTopPx - r.position.y - 10))
+              r.position.height = newH
+            }
+
+            // 允许包含图下标签（例如 Input / (a) / (b) 等）
+            // 在小图底边与 caption 之间寻找“标签行”，若存在则把底边下扩到标签行底部，但不过界到 caption
+            if (members.length > 0) {
+              const maxMemberBottomPx = Math.max(...members.map(m => m.position.y + m.position.height))
+              const isLabelLine = (text) => {
+                if (!text) return false
+                const t = (text || '').replace(/\s+/g,' ').trim()
+                if (/^\s*$/.test(t)) return false
+                if (/^(Figure|Fig\.?|Table|表|图)\s*\d+/i.test(t)) return false
+                if (t.length > 40) return false
+                if (/[.:;]$/.test(t)) return false // 句子结尾，不像标签
+                const words = t.split(' ')
+                if (words.length > 8) return false
+                const good = words.filter(w => /(\(?[a-z]\)?|[A-Za-z]{1,12}|[A-Za-z]{1,12}\([a-z]\))/i.test(w)).length
+                return good >= Math.max(2, Math.floor(words.length * 0.7))
+              }
+              const labelLines = lineObjsLocal
+                .filter(l => isLabelLine(l.text || ''))
+                .filter(l => {
+                  const lTop = offsetY + l.y * pageScale
+                  const lBottom = offsetY + (l.y + l.height) * pageScale
+                  const withinBelow = lTop >= maxMemberBottomPx - 6
+                  const belowCaption = capTopPx ? (lBottom <= capTopPx - 6) : true
+                  return withinBelow && belowCaption
+                })
+                .filter(l => {
+                  // 与组水平重叠比例至少30%
+                  const lLeft = offsetX + l.x * pageScale
+                  const lRight = offsetX + (l.x + l.width) * pageScale
+                  const overlap = Math.max(0, Math.min(lRight, r.position.x + r.position.width) - Math.max(lLeft, r.position.x))
+                  return overlap >= r.position.width * 0.3
+                })
+                .sort((a,b)=>a.y-b.y)
+              const lastLabelBottomPx = labelLines.length > 0 ? (offsetY + (labelLines[labelLines.length - 1].y + labelLines[labelLines.length - 1].height) * pageScale) : null
+              // 若存在“长文本行”，作为最终的下裁界（在 caption 不存在时使用）
+              let longTextTopPx = null
+              if (!capTopPx) {
+                const isLongText = (text) => {
+                  const t = (text || '').replace(/\s+/g,' ').trim()
+                  if (/^(Figure|Fig\.?|Table|表|图)\s*\d+/i.test(t)) return false
+                  if (isLabelLine(t)) return false
+                  return t.length >= 35 && (t.split(' ').length >= 5)
+                }
+                const longLine = lineObjsLocal
+                  .filter(l => {
+                    const lTop = offsetY + l.y * pageScale
+                    return lTop >= maxMemberBottomPx - 6 && lTop <= r.position.y + r.position.height + viewport.height * 0.25
+                  })
+                  .filter(l => isLongText(l.text))
+                  .filter(l => { const lLeft = offsetX + l.x * pageScale; const lRight = offsetX + (l.x + l.width) * pageScale; const overlap = Math.max(0, Math.min(lRight, r.position.x + r.position.width) - Math.max(lLeft, r.position.x)); return overlap >= r.position.width * 0.3 })
+                  .sort((a,b)=>a.y-b.y)[0]
+                if (longLine) longTextTopPx = offsetY + longLine.y * pageScale
+              }
+              // 计算最终底边：优先 captionTop，其次 longTextTop；保证不小于标签底边
+              let bottomLimit = r.position.y + r.position.height
+              if (capTopPx) bottomLimit = Math.min(bottomLimit, capTopPx - 6)
+              if (!capTopPx && longTextTopPx) bottomLimit = Math.min(bottomLimit, longTextTopPx - 8)
+              if (lastLabelBottomPx) bottomLimit = Math.max(bottomLimit, lastLabelBottomPx)
+              if (bottomLimit > r.position.y + 12) {
+                r.position.height = bottomLimit - r.position.y
+              }
+            }
+
+            // 收紧顶部：若框内最上方存在以大写/英文为主的列头行（且不是 Figure/Table），将顶边裁到该行下方
+            // 顶部不要裁掉图内标签（如 Input/GT Mask 等）：
+            // 仅当“顶部文本”远离小图上边缘时才裁剪；否则保留
+            const minMemberTopPx = members.length>0 ? Math.min(...members.map(m=>m.position.y)) : r.position.y
+            const header = lineObjsLocal
+              .filter(l => l.y >= rTopPdf - viewport.height * 0.05 && l.y <= rTopPdf + viewport.height * 0.25)
+              .filter(l => {
+                const text = (l.text || '').trim()
+                if (/^\s*(Figure|Fig\.?|Table|表|图)/i.test(text)) return false
+                const letters = (text.match(/[A-Za-z]/g) || []).length
+                const digits = (text.match(/[0-9]/g) || []).length
+                return letters >= 3 && letters > digits // 英文占主导
+              })
+              .filter(l => {
+                const lx1 = l.x, lx2 = l.x + l.width
+                return !(lx2 < rLeftPdf || lx1 > rRightPdf)
+              })
+              .sort((a,b)=>a.y-b.y)[0]
+            if (header) {
+              const headerBottomPx = offsetY + (header.y + header.height) * pageScale
+              const delta = headerBottomPx - r.position.y + 4
+              // 如果顶部文本紧贴小图上沿（通常是组内标签），则不裁剪
+              if (headerBottomPx <= minMemberTopPx + 40) {
+                // 保留原顶部
+              } else {
+              // 仅当裁剪量较小（不超过高度的18%且不超过28px）时才下移，避免“整体下移”的观感
+              const maxDelta = Math.min(r.position.height * 0.18, 28)
+              if (delta > 0 && delta <= maxDelta && delta < r.position.height - 20) {
+                r.position.y += delta
+                r.position.height -= delta
+              }
+              }
+            }
+
+            // 最后再小幅 padding，保持易点选
+            const pad = 4
+            r.position.x += pad
+            r.position.y += pad
+            r.position.width = Math.max(10, r.position.width - pad*2)
+            r.position.height = Math.max(10, r.position.height - pad*2)
+
+            return r
+          })
+
+          // 根据下方文本的列占比辅助横向对齐（非强制）
+          const snapToColumns = (r) => {
+            if (layout.type !== 'double') return r
+            const rBottomPdf = (r.position.y + r.position.height - offsetY) / pageScale
+            const rLeftPdf = (r.position.x - offsetX) / pageScale
+            const rRightPdf = (r.position.x + r.position.width - offsetX) / pageScale
+            const lines = lineObjsLocal
+              .filter(l => l.y >= rBottomPdf + 4 && l.y <= rBottomPdf + viewport.height * 0.18)
+            const overlap = (l, col) => {
+              const x1 = Math.max(l.x, col[0])
+              const x2 = Math.min(l.x + l.width, col[1])
+              return Math.max(0, x2 - x1)
+            }
+            const leftOv = lines.reduce((s,l)=> s + overlap(l, layout.columns[0]), 0)
+            const rightOv = lines.reduce((s,l)=> s + overlap(l, layout.columns[1]), 0)
+            const prefers = leftOv > rightOv ? 0 : 1
+            const [colMin, colMax] = layout.columns[prefers]
+            const colW = colMax - colMin
+            const rWpdf = rRightPdf - rLeftPdf
+            // 当当前宽度接近列宽或小于1.4倍列宽，且中心在该列内，则轻量对齐
+            const rCenter = (rLeftPdf + rRightPdf) / 2
+            if (rWpdf < colW * 1.4 && rCenter >= colMin && rCenter <= colMax) {
+              const targetX = offsetX + (colMin + 6) * pageScale
+              const targetW = Math.max(40, (colW - 12) * pageScale)
+              r.position.x = targetX
+              r.position.width = targetW
+            }
+            return r
+          }
+
+          // 区分公式：若区域内数学符号比例高、且没有图片成员，则排除
+          const isFormula = (r) => {
+            const txts = textItems.filter(t => {
+              const tx = t.x * pageScale + offsetX
+              const ty = t.y * pageScale + offsetY
+              const tw = (t.width||0) * pageScale
+              const th = Math.max(10,(t.height||10) * pageScale)
+              return tx + tw > r.position.x && tx < r.position.x + r.position.width &&
+                     ty + th > r.position.y && ty < r.position.y + r.position.height
+            })
+            const textJoined = txts.map(t=>t.content||'').join(' ')
+            const symCount = (textJoined.match(/[=∑∫∏√≤≥≈≠±⁄\/^_]/g) || []).length
+            const letters = (textJoined.match(/[A-Za-z]/g) || []).length
+            const hasEq = /=|∑|∫|\(|\)\s*\d+\s*\)$/.test(textJoined)
+            const memberCount = rects.filter(s => {
+              const cx = s.position.x + s.position.width/2
+              const cy = s.position.y + s.position.height/2
+              return cx >= r.position.x && cx <= r.position.x + r.position.width &&
+                     cy >= r.position.y && cy <= r.position.y + r.position.height
+            }).length
+            return (symCount >= 2 && symCount > letters * 0.12 && hasEq && memberCount === 0)
+          }
+
+          const adjusted = tightened.map(snapToColumns).filter(r => !isFormula(r))
+
+          return adjusted.map((r, idx) => ({
+            ...r,
+            type: 'image',
+            id: `image_group_${pageNumber}_${idx+1}`,
+            name: `图片组${idx+1}`,
+            content: '组合图片块（紧凑）'
+          }))
+        }
+
+        images = summarizeImages(images)
 
         // 统一图片命名与排序，生成“图片几”
         if (images.length > 0) {
@@ -1159,9 +1969,9 @@ const InteractivePDFViewer = ({ file }) => {
                   const widthScale = availableWidth / pdfWidth
                   const heightScale = availableHeight / pdfHeight
                   
-                  // 选择较小的缩放比例，确保页面完全可见，同时整体放大1.2倍
+                  // 选择较小的缩放比例，确保页面完全可见，同时整体放大1.5倍
                   const optimalScale = Math.min(widthScale, heightScale, 1.6)
-                  const finalScale = Math.min(Math.max(optimalScale * 1.2, 0.5), 2.0)
+                  const finalScale = Math.min(Math.max(optimalScale * 1.5, 0.5), 2.0)
                   
                   console.log('PDF内容尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
                   console.log('最终缩放比例:', finalScale)
@@ -1208,21 +2018,125 @@ const InteractivePDFViewer = ({ file }) => {
 
             {/* 渲染附件标记（放到与页面同层） */}
             {attachments
-              .filter(attachment => attachment.pageNumber === pageNumber)
-              .map(attachment => (
-                <div
-                  key={attachment.id}
-                  style={{
-                    ...styles.attachment,
-                    left: (attachment.area?.x ?? 20),
-                    top: (attachment.area?.y ?? 20)
-                  }}
-                  title={`附件: ${attachment.fileName}${attachment.targetName ? `（关联到：${attachment.targetName}）` : ''}`}
-                >
-                  📎
+              .filter(att => att.pageNumber === pageNumber && !att.isVideo && !att.isImage && !att.hidden)
+              .map(att => (
+                <div key={att.id} style={{ position: 'absolute', left: (att.area?.x ?? 20), top: (att.area?.y ?? 20), zIndex: 12 }}>
+                  <div
+                    style={styles.attachment}
+                    title={`附件: ${att.fileName}${att.targetName ? `（关联到：${att.targetName}）` : ''}`}
+                  >
+                    📎
+                  </div>
+                  <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
+                    <button style={styles.overlayBtn} title={"隐藏"} onClick={()=>toggleAttachmentVisibility(att.id)}>🙈</button>
+                    <button style={styles.overlayBtn} title={"删除"} onClick={()=>deleteAttachment(att.id)}>🗑</button>
+                  </div>
                 </div>
-              ))
-            }
+              ))}
+
+            {/* 视频覆盖块：恰好覆盖识别区，点击播放/暂停 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+              .map(att => {
+                const area = att.area
+                const playing = !!videoStates[att.id]?.playing
+                return (
+                  <div
+                    key={`video_${att.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: area.x,
+                      top: area.y,
+                      width: area.width,
+                      height: area.height,
+                      zIndex: 12,
+                      overflow: 'hidden',
+                      borderRadius: 4,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                    }}
+                    onClick={(e) => { e.stopPropagation(); toggleVideoPlay(att.id) }}
+                    title={`${att.fileName}（点击${playing ? '暂停' : '播放'}）`}
+                  >
+                    <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
+                      <button style={styles.overlayBtn} title={att.hidden ? '显示' : '隐藏'} onClick={()=>toggleAttachmentVisibility(att.id)}>{att.hidden ? '👁️' : '🙈'}</button>
+                      <button style={styles.overlayBtn} title={'删除'} onClick={()=>deleteAttachment(att.id)}>🗑</button>
+                    </div>
+                    <video
+                      ref={(el) => { if (el) videoRefs.current[att.id] = el }}
+                      src={att.videoUrl}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      playsInline
+                      preload="metadata"
+                      onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: true } }))}
+                      onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: false } }))}
+                      onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: false } }))}
+                    />
+                    {/* 播放按钮覆盖层 */}
+                    {!playing && (
+                      <div style={styles.videoPlayOverlay}>▶</div>
+                    )}
+                  </div>
+                )
+              })}
+
+            {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
+              .map(att => {
+                const area = att.area
+                const fit = imageStates[att.id]?.fit || 'cover'
+                return (
+                  <div
+                    key={`image_${att.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: area.x,
+                      top: area.y,
+                      width: area.width,
+                      height: area.height,
+                      zIndex: 12,
+                      overflow: 'hidden',
+                      borderRadius: 4,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                    }}
+                    title={`${att.fileName}（点击切换铺放模式）`}
+                    onClick={(e) => { e.stopPropagation(); toggleImageFit(att.id) }}
+                    onDoubleClick={(e) => { e.stopPropagation(); const w = window.open(att.imageUrl, '_blank'); if (w) w.document.title = att.fileName }}
+                  >
+                    <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
+                      <button style={styles.overlayBtn} title={att.hidden ? '显示' : '隐藏'} onClick={()=>toggleAttachmentVisibility(att.id)}>{att.hidden ? '👁️' : '🙈'}</button>
+                      <button style={styles.overlayBtn} title={'删除'} onClick={()=>deleteAttachment(att.id)}>🗑</button>
+                    </div>
+                    <img
+                      src={att.imageUrl}
+                      alt={att.fileName}
+                      draggable={false}
+                      style={{ width: '100%', height: '100%', objectFit: fit, display: 'block' }}
+                    />
+                    <div style={styles.imageFitOverlay}>{fit === 'cover' ? '填充' : '适应'}</div>
+                  </div>
+                )
+              })}
+
+            {/* 隐藏附件的“显示”按钮（占位）*/}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.hidden && att.area)
+              .map(att => (
+                <button
+                  key={`hidden_${att.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: att.area.x + 4,
+                    top: att.area.y + 4,
+                    zIndex: 13,
+                    ...styles.hiddenToggle
+                  }}
+                  title={`显示 ${att.fileName}`}
+                  onClick={(e)=>{ e.stopPropagation(); toggleAttachmentVisibility(att.id) }}
+                >
+                  👁️
+                </button>
+              ))}
 
             {/* 渲染关联的图片标记（放到与页面同层） */}
             {associatedImages
@@ -1457,14 +2371,16 @@ const styles = {
     margin: '20px 0'
   },
   controls: {
-    margin: '20px 0',
+    margin: '16px 0',
     display: 'flex',
     alignItems: 'center',
-    gap: '15px',
-    flexWrap: 'wrap'
+    gap: '10px',
+    flexWrap: 'wrap',
+    transform: 'scale(0.85)', // 缩小整体UI
+    transformOrigin: 'top center'
   },
   button: {
-    padding: '10px 20px',
+    padding: '8px 16px',
     backgroundColor: '#007bff',
     color: 'white',
     border: 'none',
@@ -1494,10 +2410,10 @@ const styles = {
   },
   pageContainer: {
     position: 'relative',
-    border: '1px solid #ddd',
-    borderRadius: '8px',
+    border: 'none',
+    borderRadius: 0,
     overflow: 'visible',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
+    boxShadow: 'none',
     userSelect: 'text',
     WebkitUserSelect: 'text',
     MozUserSelect: 'text',
@@ -1581,6 +2497,61 @@ const styles = {
     zIndex: 10,
     boxShadow: '0 2px 8px rgba(40, 167, 69, 0.3)',
     transition: 'transform 0.2s, box-shadow 0.2s'
+  },
+  videoPlayOverlay: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.25)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'white',
+    fontSize: '42px',
+    pointerEvents: 'none'
+  },
+  imageFitOverlay: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    background: 'rgba(0,0,0,0.45)',
+    color: 'white',
+    fontSize: '12px',
+    padding: '2px 6px',
+    borderRadius: 4,
+    pointerEvents: 'none'
+  },
+  overlayControls: {
+    position: 'absolute',
+    right: 6,
+    top: 6,
+    display: 'flex',
+    gap: 6,
+    zIndex: 20
+  },
+  overlayBtn: {
+    background: 'rgba(0,0,0,0.55)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 4,
+    width: 26,
+    height: 22,
+    cursor: 'pointer',
+    fontSize: 12,
+    lineHeight: '22px'
+  },
+  hiddenToggle: {
+    background: 'rgba(0,0,0,0.55)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 4,
+    width: 26,
+    height: 22,
+    cursor: 'pointer',
+    fontSize: 12,
+    lineHeight: '22px'
   }
 }
 
