@@ -2,6 +2,8 @@ import { useState } from 'react'
 import PDFViewer from './components/PDFViewer'
 import PDFParser from './components/PDFParser'
 import InteractivePDFViewer from './components/InteractivePDFViewer'
+import InteractivePDFViewer2 from './components/InteractivePDFViewer2'
+import InteractivePDFViewer3 from './components/InteractivePDFViewer3'
 import './App.css'
 // 修复 react-pdf 的 TextLayer 与 AnnotationLayer 警告，并确保层叠关系正确显示
 import 'react-pdf/dist/Page/AnnotationLayer.css'
@@ -9,7 +11,10 @@ import 'react-pdf/dist/Page/TextLayer.css'
 
 function App() {
   const [pdfFile, setPdfFile] = useState(null)
-  const [activeTab, setActiveTab] = useState('viewer') // 'viewer', 'parser', 或 'editor'
+  const [activeTab, setActiveTab] = useState('viewer') // 'viewer' | 'parser' | 'editor' | 'editor2' | 'editor3'
+  const [ppBlocks3, setPpBlocks3] = useState(null)
+  const [ppJobId3, setPpJobId3] = useState(null)
+  const [ppLoading, setPpLoading] = useState(false)
 
   const handleFileChange = (event) => {
     const file = event.target.files[0]
@@ -40,6 +45,18 @@ function App() {
             onClick={() => setActiveTab('editor')}
           >
             ✏️ 编辑器
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'editor2' ? 'active' : ''}`}
+            onClick={() => setActiveTab('editor2')}
+          >
+            🧪 编辑器 2.0
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'editor3' ? 'active' : ''}`}
+            onClick={() => setActiveTab('editor3')}
+          >
+            🧩 编辑器 3.0
           </button>
           <button
             className={`tab-button ${activeTab === 'parser' ? 'active' : ''}`}
@@ -108,6 +125,47 @@ function App() {
           <div className="tab-content">
             {activeTab === 'viewer' && <PDFViewer file={pdfFile} />}
             {activeTab === 'editor' && <InteractivePDFViewer file={pdfFile} />}
+            {activeTab === 'editor2' && <InteractivePDFViewer2 file={pdfFile} />}
+            {activeTab === 'editor3' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    className="tab-button"
+                    disabled={!pdfFile || ppLoading}
+                    onClick={async () => {
+                      if (!pdfFile) return
+                      try {
+                        setPpLoading(true)
+                        const fd = new FormData()
+                        fd.append('file', pdfFile)
+                    const res = await fetch('/api/pp-parse', { method: 'POST', body: fd })
+                    if (!res.ok) {
+                      let detail = ''
+                      try { const err = await res.json(); detail = err?.detail || err?.error || '' } catch(_) {}
+                      throw new Error('解析请求失败' + (detail ? `：${String(detail).slice(0,300)}` : ''))
+                    }
+                    const data = await res.json()
+                        setPpBlocks3(data.blocksByPage || {})
+                        setPpJobId3(data.jobId || null)
+                      } catch (e) {
+                        alert('触发解析失败：' + (e?.message || e))
+                      } finally {
+                        setPpLoading(false)
+                      }
+                    }}
+                  >{ppLoading ? '解析中…' : '⚙️ 使用本地 PP-Structure 解析'}</button>
+                  <button
+                    className="tab-button"
+                    disabled={!ppJobId3}
+                    onClick={() => {
+                      if (!ppJobId3) return
+                      window.open(`/api/pp-parse/${ppJobId3}.json`, '_blank')
+                    }}
+                  >⬇️ 下载 JSON</button>
+                </div>
+                <InteractivePDFViewer3 file={pdfFile} ppBlocksData={ppBlocks3} ppCoordType="image" />
+              </div>
+            )}
             {activeTab === 'parser' && <PDFParser file={pdfFile} />}
           </div>
         )}

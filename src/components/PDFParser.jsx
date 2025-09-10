@@ -31,178 +31,248 @@ const PDFParser = ({ file }) => {
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         
-        // 获取页面视口信息
-        const viewport = page.getViewport({ scale: 1.0 });
-        
-        // 获取文本内容
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
-        allText.push({ page: pageNum, text: pageText });
+        // 获取页面视口信息（与交互编辑器一致：使用CropBox）
+        const viewport = page.getViewport({ scale: 1.0, useCropBox: true });
 
-        // 智能文本合并 - 将位置相近的文字合并在一起
-        const textBlocks = [];
-        
-        // 收集所有文本项，包含位置信息
-        const textItems = textContent.items.map((item, index) => {
-          const transform = item.transform;
-          const x = transform[4] || 0;
-          const y = viewport.height - (transform[5] || 0); // 转换为左上角坐标系
-          
-          return {
-            index,
-            content: item.str,
-            x: Math.round(x * 100) / 100,
-            y: Math.round(y * 100) / 100,
-            width: Math.round((item.width || 0) * 100) / 100,
-            height: Math.round((item.height || 0) * 100) / 100,
-            fontSize: Math.round(Math.abs(item.height || 12) * 100) / 100,
-            fontFamily: item.fontName || 'Arial',
-            hasEOL: item.hasEOL || false,
-            transform: item.transform
-          };
-        });
-
-        // 按位置排序（从上到下，从左到右）
-        textItems.sort((a, b) => {
-          if (Math.abs(a.y - b.y) < 5) { // 同一行（Y轴差异小于5像素）
-            return a.x - b.x; // 从左到右排序
-          }
-          return a.y - b.y; // 从上到下排序
-        });
-
-        // 智能合并相近的文本
-        let currentBlock = null;
-        textItems.forEach((item) => {
-          if (!currentBlock) {
-            // 开始新的文本块
-            currentBlock = {
-              type: 'text',
-              content: item.content,
-              page: pageNum,
-              index: item.index,
-              position: {
-                x: item.x,
-                y: item.y,
-                width: item.width,
-                height: item.height
-              },
-              fontSize: item.fontSize,
-              fontFamily: item.fontFamily,
-              items: [item],
-              mergedCount: 1
-            };
-          } else {
-            // 检查是否应该合并到当前块
-            const yDiff = Math.abs(item.y - currentBlock.position.y);
-            const xDiff = item.x - (currentBlock.position.x + currentBlock.position.width);
-            
-            // 合并条件：
-            // 1. Y轴差异小于8像素（同一行）
-            // 2. X轴差异在合理范围内（-5到50像素）
-            // 3. 字体大小相近（差异小于20%）
-            const fontSizeDiff = Math.abs(item.fontSize - currentBlock.fontSize) / Math.max(item.fontSize, currentBlock.fontSize);
-            
-            if (yDiff < 8 && xDiff > -5 && xDiff < 50 && fontSizeDiff < 0.2) {
-              // 合并到当前块
-              currentBlock.content += item.content;
-              currentBlock.position.width = Math.max(
-                currentBlock.position.width,
-                item.x + item.width - currentBlock.position.x
-              );
-              currentBlock.position.height = Math.max(currentBlock.position.height, item.height);
-              currentBlock.items.push(item);
-              currentBlock.mergedCount++;
-            } else {
-              // 保存当前块，开始新块
-              textBlocks.push(currentBlock);
-              currentBlock = {
-                type: 'text',
-                content: item.content,
-                page: pageNum,
-                index: item.index,
-                position: {
-                  x: item.x,
-                  y: item.y,
-                  width: item.width,
-                  height: item.height
-                },
-                fontSize: item.fontSize,
-                fontFamily: item.fontFamily,
-                items: [item],
-                mergedCount: 1
-              };
-            }
-          }
-        });
-
-        // 添加最后一个块
-        if (currentBlock) {
-          textBlocks.push(currentBlock);
+        // 仅收集整页文本（不做定位/合并）
+        try {
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join(' ');
+          allText.push({ page: pageNum, text: pageText });
+        } catch (e) {
+          allText.push({ page: pageNum, text: '' });
         }
 
-        // 将合并后的文本块添加到所有块中
-        textBlocks.forEach((block, index) => {
-          allBlocks.push({
-            type: 'text',
-            content: block.content,
-            page: pageNum,
-            index: index,
-            position: block.position,
-            fontSize: block.fontSize,
-            fontFamily: block.fontFamily,
-            mergedCount: block.mergedCount,
-            originalItems: block.items.length
-          });
-        });
+        // 对齐编译器：计算CropBox相对MediaBox的偏移（如有）
+        let cropOffsetX = 0;
+        let cropOffsetY = 0;
+        try {
+          if (typeof page.getCropBox === 'function' && typeof page.getMediaBox === 'function') {
+            const cropBox = page.getCropBox();
+            const mediaBox = page.getMediaBox();
+            cropOffsetX = (cropBox?.x || 0) - (mediaBox?.x || 0);
+            cropOffsetY = (cropBox?.y || 0) - (mediaBox?.y || 0);
+          }
+        } catch (_) { /* ignore */ }
 
-        // 获取页面操作列表，识别图像
+        // 解析绘制操作，识别图片与矢量矩形（矩形框）
         const operatorList = await page.getOperatorList();
         const imageBlocks = [];
-        
-        // 分析操作列表，查找图像绘制操作
+
+        // 维护当前变换矩阵与填充状态（与交互编辑器一致的思路）
+        let currentTransform = [1, 0, 0, 1, 0, 0]; // a,b,c,d,e,f
+        const transformStack = [];
+        let currentFill = { space: 'gray', value: [0] };
+        const fillStack = [];
+        let pendingRects = [];
+        let imageCount = 0;
+
+        // 工具：从PDF坐标转换为左上角为原点的页面坐标（scale=1）
+        const toTopLeftRect = (minX, minY, maxX, maxY) => ({
+          x: minX,
+          y: Math.max(0, viewport.height - maxY),
+          width: Math.max(0, maxX - minX),
+          height: Math.max(0, maxY - minY)
+        });
+
+        // 去重：基于IoU检查是否已有近似重复块
+        const iou = (a, b) => {
+          const x1 = Math.max(a.position.x, b.position.x);
+          const y1 = Math.max(a.position.y, b.position.y);
+          const x2 = Math.min(a.position.x + a.position.width, b.position.x + b.position.width);
+          const y2 = Math.min(a.position.y + a.position.height, b.position.y + b.position.height);
+          const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+          const areaA = a.position.width * a.position.height;
+          const areaB = b.position.width * b.position.height;
+          return inter / (areaA + areaB - inter + 1e-6);
+        };
+
         for (let i = 0; i < operatorList.fnArray.length; i++) {
-          const fn = operatorList.fnArray[i];
+          const op = operatorList.fnArray[i];
           const args = operatorList.argsArray[i];
-          
-          // 检查是否是图像绘制操作
-          if (fn === pdfjsLib.OPS.paintImageXObject || 
-              fn === pdfjsLib.OPS.paintImageXObjectGroup ||
-              fn === pdfjsLib.OPS.paintXObject ||
-              fn === pdfjsLib.OPS.paintFormXObject) {
-            
-            const imageName = args[0];
-            if (imageName) {
-              // 尝试获取图像位置信息
-              let imagePosition = {
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 100
-              };
-              
-              // 查找变换矩阵操作
-              for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-                if (operatorList.fnArray[j] === pdfjsLib.OPS.transform) {
-                  const transform = operatorList.argsArray[j];
-                  if (transform && transform.length >= 6) {
-                    imagePosition.x = transform[4] || 0;
-                    imagePosition.y = viewport.height - (transform[5] || 0);
-                    imagePosition.width = Math.abs(transform[0]) || 100;
-                    imagePosition.height = Math.abs(transform[3]) || 100;
-                    break;
+
+          if (op === pdfjsLib.OPS.save) {
+            transformStack.push([...currentTransform]);
+            fillStack.push({ ...currentFill });
+          } else if (op === pdfjsLib.OPS.restore) {
+            const restored = transformStack.pop();
+            if (restored) currentTransform = restored;
+            const f = fillStack.pop();
+            if (f) currentFill = f;
+          } else if (op === pdfjsLib.OPS.transform) {
+            const [a2, b2, c2, d2, e2, f2] = args || [1, 0, 0, 1, 0, 0];
+            const [a1, b1, c1, d1, e1, f1] = currentTransform;
+            currentTransform = [
+              a1 * a2 + c1 * b2,
+              b1 * a2 + d1 * b2,
+              a1 * c2 + c1 * d2,
+              b1 * c2 + d1 * d2,
+              a1 * e2 + c1 * f2 + e1,
+              b1 * e2 + d1 * f2 + f1
+            ];
+          } else if (op === pdfjsLib.OPS.setTransform) {
+            const [a, b, c, d, e, f] = args || [1, 0, 0, 1, 0, 0];
+            currentTransform = [a, b, c, d, e, f];
+          } else if (typeof pdfjsLib.OPS.setFillRGBColor !== 'undefined' && op === pdfjsLib.OPS.setFillRGBColor) {
+            currentFill = { space: 'rgb', value: args };
+          } else if (typeof pdfjsLib.OPS.setFillGray !== 'undefined' && op === pdfjsLib.OPS.setFillGray) {
+            currentFill = { space: 'gray', value: args };
+          } else if (typeof pdfjsLib.OPS.setFillCMYKColor !== 'undefined' && op === pdfjsLib.OPS.setFillCMYKColor) {
+            currentFill = { space: 'cmyk', value: args };
+          } else if (op === pdfjsLib.OPS.constructPath) {
+            // 解析路径中的矩形（与交互编辑器逻辑一致的核心部分）
+            try {
+              const opsArr = Array.isArray(args?.[0]) ? args[0] : null;
+              const coordsArr = Array.isArray(args?.[1]) ? args[1] : null;
+              if (opsArr && coordsArr) {
+                const RECT = pdfjsLib.OPS.rectangle;
+                const MOVE = pdfjsLib.OPS.moveTo;
+                const LINE = pdfjsLib.OPS.lineTo;
+                const CURV = pdfjsLib.OPS.curveTo;
+                const CURV2 = pdfjsLib.OPS.curveTo2;
+                const CURV3 = pdfjsLib.OPS.curveTo3;
+                const CLOSE = pdfjsLib.OPS.closePath;
+                const argCount = (k) => (k === RECT ? 4 : k === MOVE || k === LINE ? 2 : k === CURV ? 6 : (CURV2 && k === CURV2) || (CURV3 && k === CURV3) ? 4 : 0);
+                let p = 0;
+                let sub = [];
+                const [a, b, c, d, e, f] = currentTransform;
+                const apply = (px, py) => ({ x: a * px + c * py + e, y: b * px + d * py + f });
+                const pushRectIfValid = (minX, minY, maxX, maxY) => {
+                  // 转换到CropBox，再转为左上角坐标系
+                  const cx1 = minX - cropOffsetX;
+                  const cy1 = minY - cropOffsetY;
+                  const cx2 = maxX - cropOffsetX;
+                  const cy2 = maxY - cropOffsetY;
+                  const rect = toTopLeftRect(cx1, cy1, cx2, cy2);
+                  if (rect.width >= 20 && rect.height >= 20) {
+                    pendingRects.push(rect);
                   }
+                };
+                const tryAxisAlignedRect = (pts) => {
+                  if (pts.length < 4) return;
+                  const xs = pts.map(p0 => p0.x);
+                  const ys = pts.map(p0 => p0.y);
+                  const minX = Math.min(...xs), maxX = Math.max(...xs);
+                  const minY = Math.min(...ys), maxY = Math.max(...ys);
+                  const eps = 1e-3;
+                  const ok = pts.every(p0 => (Math.abs(p0.x - minX) < eps || Math.abs(p0.x - maxX) < eps) && (Math.abs(p0.y - minY) < eps || Math.abs(p0.y - maxY) < eps));
+                  if (ok) pushRectIfValid(minX, minY, maxX, maxY);
+                };
+                for (let oi = 0; oi < opsArr.length; oi++) {
+                  const kind = opsArr[oi];
+                  const n = argCount(kind);
+                  if (kind === RECT && p + 3 < coordsArr.length) {
+                    const x = coordsArr[p];
+                    const y = coordsArr[p + 1];
+                    const w = coordsArr[p + 2];
+                    const h = coordsArr[p + 3];
+                    const pts = [apply(x, y), apply(x + w, y), apply(x + w, y + h), apply(x, y + h)];
+                    const cropPts = pts.map(p0 => ({ x: p0.x - cropOffsetX, y: p0.y - cropOffsetY }));
+                    const minX = Math.min(...cropPts.map(p0 => p0.x));
+                    const maxX = Math.max(...cropPts.map(p0 => p0.x));
+                    const minY = Math.min(...cropPts.map(p0 => p0.y));
+                    const maxY = Math.max(...cropPts.map(p0 => p0.y));
+                    pushRectIfValid(minX, minY, maxX, maxY);
+                  } else if ((kind === MOVE || kind === LINE) && p + 1 < coordsArr.length) {
+                    const x = coordsArr[p];
+                    const y = coordsArr[p + 1];
+                    const pt = apply(x, y);
+                    sub.push({ x: pt.x - cropOffsetX, y: pt.y - cropOffsetY });
+                  } else if (kind === CLOSE) {
+                    tryAxisAlignedRect(sub);
+                    sub = [];
+                  }
+                  p += Math.max(0, n);
                 }
               }
-              
-              imageBlocks.push({
+            } catch (e) {
+              // ignore constructPath errors
+            }
+          }
+
+          // 确认 pending 矩形：遇到填充/描边时加入结果
+          const confirmPending = () => {
+            if (!pendingRects.length) return;
+            for (const pr of pendingRects) {
+              const rw = pr.width, rh = pr.height;
+              if (rw < 30 || rh < 30) continue;
+              if (rw / rh < 0.05 || rh / rw < 0.05) continue; // 忽略极细长
+              const candidate = {
+                id: `vector_rect_${pageNum}_${imageCount}`,
                 type: 'image',
-                name: imageName,
                 page: pageNum,
-                index: i,
-                position: imagePosition,
-                content: `图像 ${imageName}`,
-                imageType: 'pdf_image'
-              });
+                index: imageCount,
+                position: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) },
+                content: '矩形占位',
+                imageType: 'vector_rect',
+                fill: currentFill
+              };
+              const dup = imageBlocks.some(r => iou(r, candidate) > 0.7);
+              if (!dup) {
+                imageBlocks.push(candidate);
+                imageCount++;
+              }
+            }
+            pendingRects = [];
+          };
+
+          if (
+            op === pdfjsLib.OPS.fill ||
+            op === pdfjsLib.OPS.fillStroke ||
+            (typeof pdfjsLib.OPS.eoFill !== 'undefined' && op === pdfjsLib.OPS.eoFill) ||
+            (typeof pdfjsLib.OPS.eoFillStroke !== 'undefined' && op === pdfjsLib.OPS.eoFillStroke) ||
+            (typeof pdfjsLib.OPS.closeFillStroke !== 'undefined' && op === pdfjsLib.OPS.closeFillStroke)
+          ) {
+            confirmPending();
+          }
+          if (
+            op === pdfjsLib.OPS.stroke ||
+            (typeof pdfjsLib.OPS.closeStroke !== 'undefined' && op === pdfjsLib.OPS.closeStroke)
+          ) {
+            confirmPending();
+          }
+
+          // 图片绘制操作：计算包围框
+          if (
+            op === pdfjsLib.OPS.paintInlineImageXObject ||
+            op === pdfjsLib.OPS.paintImageXObject ||
+            op === pdfjsLib.OPS.paintImageMaskXObject ||
+            op === pdfjsLib.OPS.paintXObject ||
+            op === pdfjsLib.OPS.paintFormXObject
+          ) {
+            try {
+              const [a, b, c, d, e, f] = currentTransform;
+              const corners = [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: 1, y: 1 },
+                { x: 0, y: 1 }
+              ];
+              const transformed = corners.map(pt => ({ x: a * pt.x + c * pt.y + e, y: b * pt.x + d * pt.y + f }));
+              const cropPts = transformed.map(p0 => ({ x: p0.x - cropOffsetX, y: p0.y - cropOffsetY }));
+              const xs = cropPts.map(p0 => p0.x);
+              const ys = cropPts.map(p0 => p0.y);
+              const minX = Math.min(...xs), maxX = Math.max(...xs);
+              const minY = Math.min(...ys), maxY = Math.max(...ys);
+              const rect = toTopLeftRect(minX, minY, maxX, maxY);
+              if (rect.width >= 15 && rect.height >= 15) {
+                const img = {
+                  id: `image_${pageNum}_${imageCount}`,
+                  type: 'image',
+                  page: pageNum,
+                  index: imageCount,
+                  position: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+                  content: '图像',
+                  imageType: 'bitmap_or_form'
+                };
+                const dup = imageBlocks.some(r => iou(r, img) > 0.7);
+                if (!dup) {
+                  imageBlocks.push(img);
+                  imageCount++;
+                }
+              }
+            } catch (e) {
+              // ignore image op errors
             }
           }
         }
@@ -214,11 +284,11 @@ const PDFParser = ({ file }) => {
 
       const result = {
         totalPages: pdf.numPages,
-        textContent: allText,
+        textContent: allText, // 保留整页文本，已移除文本定位/合并
         imageBlocks: allImages,
         allBlocks: allBlocks,
         summary: {
-          textBlocks: allBlocks.filter(b => b.type === 'text').length,
+          textBlocks: 0,
           imageBlocks: allImages.length,
           totalBlocks: allBlocks.length
         }
@@ -241,7 +311,9 @@ const PDFParser = ({ file }) => {
       return;
     }
 
-    const jsonData = JSON.stringify(parsedContent, null, 2);
+    // 导出时移除整页文本内容（textContent）
+    const { textContent: _omitText, ...exportData } = parsedContent || {};
+    const jsonData = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonData], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

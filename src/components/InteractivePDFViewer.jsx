@@ -186,11 +186,11 @@ const InteractivePDFViewer = ({ file }) => {
     const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
     let matched = null
     if (selectedArea && selectedText) {
-      // 选中文本时也优先匹配最近图片/表格
+      // 选中文本时也优先匹配最近图片
       matched = matchVisualAnnotation(selectedArea) || matchAnnotation(selectedArea)
       if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
     } else if (wrapperRect) {
-      // 右键点击优先匹配图片/表格
+      // 右键点击优先匹配图片
       matched = matchVisualAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
       if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
     }
@@ -509,7 +509,7 @@ const InteractivePDFViewer = ({ file }) => {
         })
         if (currentGroup) mergedTexts.push(currentGroup)
 
-        // 智能区域识别：识别表格和图片等大区域
+        // 智能区域识别：仅识别图片等大区域（表格解析已禁用）
         const annotations = []
         // 统一坐标：把所有识别到的区域转换为“容器像素坐标”（相对于pageWrapperRef的绝对定位）
         const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
@@ -518,8 +518,10 @@ const InteractivePDFViewer = ({ file }) => {
         const offsetX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
         const offsetY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
         
-        // 1. 检测表格区域（基于文本密度和布局）
+        // 1. 检测表格区域（基于文本密度和布局）- 已按需求禁用，仅返回空数组
         const detectTables = (textItems) => {
+          // 表格解析禁用：仅做图片定位
+          return []
           const tables = []
           
           // 按Y坐标分组，识别表格行
@@ -1065,7 +1067,8 @@ const InteractivePDFViewer = ({ file }) => {
 
             // 标题识别：要求行首匹配，避免段落中的“In Figure 1 ...”
             const figureLines = lineObjs.filter(l => /^\s*(Figure|Fig\.?|图表|图)\s*[:：]?\s*\d+/i.test(l.text))
-            const tableLines = lineObjs.filter(l => /^\s*(Table|表)\s*[:：]?\s*\d+/i.test(l.text))
+            // 表格标题识别禁用
+            const tableLines = []
 
             // 辅助：统计候选区域内的文本密度和网格感
             const analyzeTextArea = (pxX, pxY, pxW, pxH) => {
@@ -1193,7 +1196,7 @@ const InteractivePDFViewer = ({ file }) => {
             }
 
             figureLines.forEach((cap, idx) => addBlockAboveCaption(cap, 'image', idx))
-            tableLines.forEach((cap, idx) => addBlockAboveCaption(cap, 'table', idx))
+            // 表格兜底已禁用
           } catch (e) {
             console.warn('文本稀疏度兜底失败:', e)
           }
@@ -1202,7 +1205,8 @@ const InteractivePDFViewer = ({ file }) => {
         }
         
         // 执行检测
-        let tables = detectTables(textItems)
+        // 表格解析禁用
+        let tables = []
         let images = await detectImages()
 
         // 汇总图片块：将同一列内大量小图合并成整体块，双栏最多两个
@@ -1242,48 +1246,75 @@ const InteractivePDFViewer = ({ file }) => {
           const leftColPx = layout.type === 'double' ? [offsetX + layout.columns[0][0] * pageScale, offsetX + layout.columns[0][1] * pageScale] : null
           const rightColPx = layout.type === 'double' ? [offsetX + layout.columns[1][0] * pageScale, offsetX + layout.columns[1][1] * pageScale] : null
 
+          // 特例：检测“实验图表网格”的行级区域（N 行 x 3 列小图）
+          const detectGridRows = (rs) => {
+            try {
+              if (!rs || rs.length < 6) return []
+              const items = rs
+                .map(r => ({ x: r.position.x, y: r.position.y, w: r.position.width, h: r.position.height, id: r.id }))
+                .filter(r => r.w > 60 && r.h > 28 && r.w / r.h > 1.05 && r.w / r.h < 8)
+              if (items.length < 6) return []
+              const hMed = (() => { const a=items.map(i=>i.h).sort((a,b)=>a-b); const m=Math.floor(a.length/2); return a.length? (a.length%2?a[m]:(a[m-1]+a[m])/2):0 })()
+              if (hMed <= 0) return []
+              const rowTol = Math.max(18, hMed * 0.7)
+              const sorted = items.map(i => ({...i, cy: i.y + i.h/2})).sort((a,b)=>a.cy-b.cy)
+              const rows = []
+              let cur = []
+              sorted.forEach(it => {
+                if (cur.length === 0) { cur = [it]; return }
+                const avg = cur.reduce((s,i)=>s+i.cy,0)/cur.length
+                if (Math.abs(it.cy - avg) <= rowTol) cur.push(it)
+                else { rows.push(cur); cur = [it] }
+              })
+              if (cur.length) rows.push(cur)
+              const padX = 10, padY = 8
+              const makeRect = (row, idx) => {
+                if (row.length < 3) return null
+                const minX = Math.min(...row.map(i=>i.x))
+                const maxX = Math.max(...row.map(i=>i.x + i.w))
+                const minY = Math.min(...row.map(i=>i.y))
+                const maxY = Math.max(...row.map(i=>i.y + i.h))
+                const w = maxX - minX, h = maxY - minY
+                if (w < 200 || w/h < 1.6) return null
+                return {
+                  id: `grid_row_${pageNumber}_${idx+1}`,
+                  type: 'image',
+                  position: {
+                    x: Math.max(0, minX - padX),
+                    y: Math.max(0, minY - padY),
+                    width: w + padX * 2,
+                    height: h + padY * 2
+                  },
+                  content: '实验图表行',
+                  locked: true
+                }
+              }
+              const rowsRects = rows.map(makeRect).filter(Boolean)
+              return rowsRects.slice(0, 12)
+            } catch(_) { return [] }
+          }
+          const gridRowRects = detectGridRows(rects)
+
           // 工具：两矩形是否应合并（重叠或很近）；双栏下禁止跨列合并
           const shouldMerge = (a, b) => {
+            // 初步合并：放宽跨列限制；用“正交方向重叠 + 间距”或 IoU 来判断
             const ax2 = a.position.x + a.position.width
             const ay2 = a.position.y + a.position.height
             const bx2 = b.position.x + b.position.width
             const by2 = b.position.y + b.position.height
-            const overlapX = Math.max(0, Math.min(ax2, b.position.x) - Math.max(a.position.x, b.position.x))
-            const overlapY = Math.max(0, Math.min(ay2, b.position.y) - Math.max(a.position.y, b.position.y))
+            const overlapX = Math.max(0, Math.min(ax2, b.position.x + b.position.width) - Math.max(a.position.x, b.position.x))
+            const overlapY = Math.max(0, Math.min(ay2, b.position.y + b.position.height) - Math.max(a.position.y, b.position.y))
             const inter = overlapX * overlapY
             const areaA = a.position.width * a.position.height
             const areaB = b.position.width * b.position.height
             const iou = inter / (areaA + areaB - inter + 1e-6)
-            // 接近判定：边距小于阈值且在同一带
             const gapX = Math.max(0, Math.max(a.position.x, b.position.x) - Math.min(ax2, bx2))
             const gapY = Math.max(0, Math.max(a.position.y, b.position.y) - Math.min(ay2, by2))
-            const nearX = gapX < 24
-            const nearY = gapY < 24
-            // 双栏：若中心点分属不同列，则不合并
-            if (layout.type === 'double' && boundaryPx !== null) {
-              const aCenter = a.position.x + a.position.width / 2
-              const bCenter = b.position.x + b.position.width / 2
-              const guard = 16
-              const aSide = aCenter < boundaryPx - guard ? 'L' : (aCenter > boundaryPx + guard ? 'R' : 'M')
-              const bSide = bCenter < boundaryPx - guard ? 'L' : (bCenter > boundaryPx + guard ? 'R' : 'M')
-              if (aSide !== 'M' && bSide !== 'M' && aSide !== bSide) return false
-              // 如果落在中缝附近，按照与列区间的重叠更多的一侧决定；若不同侧则仍不合并
-              if (aSide === 'M' || bSide === 'M') {
-                const overlapWith = (r, colPx) => {
-                  const x1 = Math.max(r.position.x, colPx[0])
-                  const x2 = Math.min(r.position.x + r.position.width, colPx[1])
-                  return Math.max(0, x2 - x1)
-                }
-                const aOverlapL = leftColPx ? overlapWith(a, leftColPx) : 0
-                const aOverlapR = rightColPx ? overlapWith(a, rightColPx) : 0
-                const bOverlapL = leftColPx ? overlapWith(b, leftColPx) : 0
-                const bOverlapR = rightColPx ? overlapWith(b, rightColPx) : 0
-                const aSide2 = aOverlapL >= aOverlapR ? 'L' : 'R'
-                const bSide2 = bOverlapL >= bOverlapR ? 'L' : 'R'
-                if (aSide2 !== bSide2) return false
-              }
-            }
-            return iou > 0.05 || (nearX && overlapY > 10) || (nearY && overlapX > 10)
+            const hOverlapRatio = overlapY / Math.min(a.position.height, b.position.height)
+            const vOverlapRatio = overlapX / Math.min(a.position.width, b.position.width)
+            const nearX = gapX < 28 && hOverlapRatio >= 0.6 // 横向合并：垂直方向重叠足够，水平间距小
+            const nearY = gapY < 28 && vOverlapRatio >= 0.6 // 纵向合并：水平方向重叠足够，垂直间距小
+            return iou > 0.12 || nearX || nearY
           }
 
           const unionRect = (a, b) => ({
@@ -1361,12 +1392,7 @@ const InteractivePDFViewer = ({ file }) => {
             mergedRects = cur
           }
 
-          // 限制最多两个，按面积取前2
-          if (mergedRects.length > 2) {
-            mergedRects = mergedRects
-              .sort((a, b) => (b.position.width * b.position.height) - (a.position.width * a.position.height))
-              .slice(0, 2)
-          }
+          // 不再限制组数量，保留全部候选组
 
           // 紧凑化：以组内的基础小图（rects）重新计算紧边界，并排除下方的 Figure/图 caption 行
           const toPdfY = (py) => (py - offsetY) / pageScale
@@ -1578,6 +1604,13 @@ const InteractivePDFViewer = ({ file }) => {
               r.position.x = targetX
               r.position.width = targetW
             }
+            // 进一步：若宽度明显小于列宽 50%，而中心在列内，则扩展到接近列宽，避免“细长竖条”
+            if (rWpdf < colW * 0.5 && rCenter >= colMin && rCenter <= colMax) {
+              const targetX = offsetX + (colMin + 6) * pageScale
+              const targetW = Math.max(r.position.width, (colW - 12) * pageScale)
+              r.position.x = targetX
+              r.position.width = targetW
+            }
             return r
           }
 
@@ -1606,16 +1639,259 @@ const InteractivePDFViewer = ({ file }) => {
 
           const adjusted = tightened.map(snapToColumns).filter(r => !isFormula(r))
 
-          return adjusted.map((r, idx) => ({
+          // 最终一轮合并：在“框选完成”（已紧边界并对齐列）后，扫描可合并的相邻/重叠组
+          const mergeCloseFinal = (list) => {
+            const shouldMerge = (a, b) => {
+              const ax2 = a.position.x + a.position.width
+              const ay2 = a.position.y + a.position.height
+              const bx2 = b.position.x + b.position.width
+              const by2 = b.position.y + b.position.height
+              const overlapX = Math.max(0, Math.min(ax2, b.position.x + b.position.width) - Math.max(a.position.x, b.position.x))
+              const overlapY = Math.max(0, Math.min(ay2, b.position.y + b.position.height) - Math.max(a.position.y, b.position.y))
+              const inter = overlapX * overlapY
+              const areaA = Math.max(1, a.position.width * a.position.height)
+              const areaB = Math.max(1, b.position.width * b.position.height)
+              const iou = inter / (areaA + areaB - inter + 1e-6)
+              const gapX = Math.max(0, Math.max(a.position.x, b.position.x) - Math.min(ax2, bx2))
+              const gapY = Math.max(0, Math.max(a.position.y, b.position.y) - Math.min(ay2, by2))
+              const nearX = gapX < Math.min(a.position.width, b.position.width) * 0.06
+              const nearY = gapY < Math.min(a.position.height, b.position.height) * 0.06
+              // 双栏：禁止跨列合并
+              if (layout.type === 'double' && boundaryPx !== null) {
+                const aC = a.position.x + a.position.width/2
+                const bC = b.position.x + b.position.width/2
+                const guard = 16
+                const aSide = aC < boundaryPx - guard ? 'L' : (aC > boundaryPx + guard ? 'R' : 'M')
+                const bSide = bC < boundaryPx - guard ? 'L' : (bC > boundaryPx + guard ? 'R' : 'M')
+                if (aSide !== 'M' && bSide !== 'M' && aSide !== bSide) return false
+              }
+              return iou > 0.25 || (nearX && overlapY > 10) || (nearY && overlapX > 10)
+            }
+            const unionRect = (a, b) => ({
+              ...a,
+              position: {
+                x: Math.min(a.position.x, b.position.x),
+                y: Math.min(a.position.y, b.position.y),
+                width: Math.max(a.position.x + a.position.width, b.position.x + b.position.width) - Math.min(a.position.x, b.position.x),
+                height: Math.max(a.position.y + a.position.height, b.position.y + b.position.height) - Math.min(a.position.y, b.position.y)
+              }
+            })
+            let cur = list
+            for (let iter = 0; iter < 3; iter++) {
+              const used = new Array(cur.length).fill(false)
+              const next = []
+              for (let i = 0; i < cur.length; i++) {
+                if (used[i]) continue
+                let acc = cur[i]
+                for (let j = i + 1; j < cur.length; j++) {
+                  if (used[j]) continue
+                  if (shouldMerge(acc, cur[j])) {
+                    acc = unionRect(acc, cur[j])
+                    used[j] = true
+                  }
+                }
+                next.push(acc)
+              }
+              if (next.length === cur.length) { cur = next; break }
+              cur = next
+            }
+            return cur
+          }
+
+          const finalGroups = mergeCloseFinal(adjusted)
+          const withRows = [...gridRowRects, ...finalGroups]
+
+          // 全局“智能合并”：允许跨列，但需要高正交重叠或 IoU，兼顾图表行/列
+          const smartMergeAll = (arr) => {
+            const canMerge = (a, b) => {
+              const ax2 = a.position.x + a.position.width
+              const ay2 = a.position.y + a.position.height
+              const bx2 = b.position.x + b.position.width
+              const by2 = b.position.y + b.position.height
+              const overlapX = Math.max(0, Math.min(ax2, b.position.x + b.position.width) - Math.max(a.position.x, b.position.x))
+              const overlapY = Math.max(0, Math.min(ay2, b.position.y + b.position.height) - Math.max(a.position.y, b.position.y))
+              const inter = overlapX * overlapY
+              const areaA = a.position.width * a.position.height
+              const areaB = b.position.width * b.position.height
+              const iou = inter / (areaA + areaB - inter + 1e-6)
+              const gapX = Math.max(0, Math.max(a.position.x, b.position.x) - Math.min(ax2, bx2))
+              const gapY = Math.max(0, Math.max(a.position.y, b.position.y) - Math.min(ay2, by2))
+              const hOverlapRatio = overlapY / Math.min(a.position.height, b.position.height)
+              const vOverlapRatio = overlapX / Math.min(a.position.width, b.position.width)
+              // 允许跨列：只要满足横向/纵向合并之一，或 IoU 足够
+              const horiz = gapX <= 32 && hOverlapRatio >= 0.65
+              const vert = gapY <= 32 && vOverlapRatio >= 0.65
+              // grid 行之间：如果左右对齐且间隙小，合并为整列/整页
+              const isRowA = String(a.id||'').startsWith('grid_row_')
+              const isRowB = String(b.id||'').startsWith('grid_row_')
+              const rowCompat = (isRowA || isRowB) && (hOverlapRatio >= 0.55 || vOverlapRatio >= 0.55)
+              return iou > 0.2 || horiz || vert || rowCompat
+            }
+            const union = (a, b) => ({
+              ...a,
+              position: {
+                x: Math.min(a.position.x, b.position.x),
+                y: Math.min(a.position.y, b.position.y),
+                width: Math.max(a.position.x + a.position.width, b.position.x + b.position.width) - Math.min(a.position.x, b.position.x),
+                height: Math.max(a.position.y + a.position.height, b.position.y + b.position.height) - Math.min(a.position.y, b.position.y)
+              },
+              id: (String(a.id||'').startsWith('grid_row_') || String(b.id||'').startsWith('grid_row_')) ? `grid_block_${pageNumber}` : a.id
+            })
+            let cur = arr
+            for (let iter = 0; iter < 3; iter++) {
+              const used = new Array(cur.length).fill(false)
+              const next = []
+              for (let i = 0; i < cur.length; i++) {
+                if (used[i]) continue
+                let acc = cur[i]
+                for (let j = i + 1; j < cur.length; j++) {
+                  if (used[j]) continue
+                  if (canMerge(acc, cur[j])) { acc = union(acc, cur[j]); used[j] = true }
+                }
+                next.push(acc)
+              }
+              if (next.length === cur.length) { cur = next; break }
+              cur = next
+            }
+            return cur
+          }
+
+          const mergedAll = smartMergeAll(withRows)
+
+          return mergedAll.map((r, idx) => ({
             ...r,
             type: 'image',
-            id: `image_group_${pageNumber}_${idx+1}`,
-            name: `图片组${idx+1}`,
+            id: (r.id && r.id.startsWith('grid_row_')) ? r.id : `image_group_${pageNumber}_${idx+1}`,
+            name: (r.id && r.id.startsWith('grid_row_')) ? `图表行${idx+1}` : `图片组${idx+1}`,
             content: '组合图片块（紧凑）'
           }))
         }
 
         images = summarizeImages(images)
+
+        // 右上角兜底：若右上区域没有检测到图片，给出定位矩形
+        try {
+          const pageWpx = viewport.width * pageScale
+          const pageHpx = viewport.height * pageScale
+
+          // 简易分栏推断，获取右栏范围
+          const xs = textItems.map(t => t.x).sort((a,b)=>a-b)
+          let rightMin = viewport.width * 0.58
+          let rightMax = viewport.width * 0.96
+          if (xs.length > 20) {
+            let maxGap = 0, gapIdx = -1
+            for (let i=1;i<xs.length;i++){
+              const g = xs[i] - xs[i-1]
+              if (g > maxGap) { maxGap = g; gapIdx = i }
+            }
+            if (maxGap >= viewport.width * 0.12) {
+              const boundary = (xs[gapIdx] + xs[gapIdx-1]) / 2
+              const rightXs = xs.filter(v => v >= boundary)
+              if (rightXs.length > 0) {
+                rightMin = Math.min(...rightXs)
+                rightMax = Math.max(...rightXs) + 40
+              }
+            }
+          }
+
+          const candX = offsetX + Math.max(0, rightMin + 6) * pageScale
+          const candW = Math.max(80, (Math.min(viewport.width - 12, rightMax) - Math.max(0, rightMin) - 12) * pageScale)
+          const candY = offsetY + (pageHpx * 0.06)
+          const candH = Math.max(100, pageHpx * 0.26)
+
+          // 文本覆盖率（避免覆盖正文）
+          const textCoverRatioInPxRect = (rx, ry, rw, rh) => {
+            const items = textItems.filter(t => {
+              const tx = t.x * pageScale + offsetX
+              const ty = t.y * pageScale + offsetY
+              const tw = (t.width || 0) * pageScale
+              const th = Math.max(10, (t.height || 10) * pageScale)
+              return tx + tw > rx && tx < rx + rw && ty + th > ry && ty < ry + rh
+            })
+            const cover = items.reduce((s, t) => s + Math.max(1, t.width) * Math.max(10, t.height), 0) * (pageScale * pageScale)
+            const area = Math.max(1, rw * rh)
+            return cover / area
+          }
+
+          // 右上区域是否已有图片
+          const regionX1 = offsetX + pageWpx * 0.55
+          const regionY1 = offsetY
+          const regionX2 = offsetX + pageWpx
+          const regionY2 = offsetY + pageHpx * 0.45
+          const covered = images.some(img => {
+            const cx = img.position.x + img.position.width/2
+            const cy = img.position.y + img.position.height/2
+            return cx >= regionX1 && cx <= regionX2 && cy >= regionY1 && cy <= regionY2
+          })
+
+          if (!covered) {
+            const cover = textCoverRatioInPxRect(candX, candY, candW, candH)
+            if (cover <= 0.45) {
+              images.push({
+                id: `image_top_right_${pageNumber}_1`,
+                type: 'image',
+                position: { x: Math.round(candX), y: Math.round(candY), width: Math.round(candW), height: Math.round(candH) },
+                content: '右上角图片区域(兜底)',
+                description: '自动兜底定位矩形（右上角）',
+                isFallback: true
+              })
+            }
+          }
+        } catch (e) {
+          console.warn('右上角兜底定位失败:', e)
+        }
+
+        // 去重：若兜底框与已有组强重叠或被完全包含，则移除兜底框（优先保留非兜底）
+        const dedupeImages = (arr) => {
+          const res = []
+          const iou = (A, B) => {
+            const ax2 = A.position.x + A.position.width
+            const ay2 = A.position.y + A.position.height
+            const bx2 = B.position.x + B.position.width
+            const by2 = B.position.y + B.position.height
+            const x1 = Math.max(A.position.x, B.position.x)
+            const y1 = Math.max(A.position.y, B.position.y)
+            const x2 = Math.min(ax2, bx2)
+            const y2 = Math.min(ay2, by2)
+            const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1)
+            const areaA = Math.max(1, A.position.width * A.position.height)
+            const areaB = Math.max(1, B.position.width * B.position.height)
+            const uni = areaA + areaB - inter
+            return uni > 0 ? inter / uni : 0
+          }
+          const containRatio = (A, B) => {
+            const ax2 = A.position.x + A.position.width
+            const ay2 = A.position.y + A.position.height
+            const bx2 = B.position.x + B.position.width
+            const by2 = B.position.y + B.position.height
+            const x1 = Math.max(A.position.x, B.position.x)
+            const y1 = Math.max(A.position.y, B.position.y)
+            const x2 = Math.min(ax2, bx2)
+            const y2 = Math.min(ay2, by2)
+            const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1)
+            const small = Math.min(A.position.width * A.position.height, B.position.width * B.position.height)
+            return small > 0 ? inter / small : 0
+          }
+          arr.forEach((cur) => {
+            // 若与 res 中某个框强重叠，做取舍
+            const conflictIdx = res.findIndex(r => iou(r, cur) > 0.5 || containRatio(r, cur) > 0.7)
+            if (conflictIdx === -1) { res.push(cur); return }
+            const r = res[conflictIdx]
+            // 优先保留非兜底
+            if (r.isFallback && !cur.isFallback) {
+              res[conflictIdx] = cur
+              return
+            }
+            if (!r.isFallback && cur.isFallback) {
+              return
+            }
+            // 其余情况保留面积更大的
+            const area = (x) => x.position.width * x.position.height
+            if (area(cur) > area(r)) res[conflictIdx] = cur
+          })
+          return res
+        }
+        images = dedupeImages(images)
 
         // 统一图片命名与排序，生成“图片几”
         if (images.length > 0) {
@@ -1628,26 +1904,12 @@ const InteractivePDFViewer = ({ file }) => {
             }))
         }
 
-        // 为表格命名（表格一、表格二…）
-        if (tables.length > 0) {
-          tables = tables
-            .sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x))
-            .map((tb, idx) => ({
-              ...tb,
-              index: idx + 1,
-              name: `表格${idx + 1}`
-            }))
-        }
+        // 表格命名逻辑已移除（解析禁用）
 
-        // 合并所有区域
-        annotations.push(...tables)
+        // 合并所有区域（仅图片）
         annotations.push(...images)
         
-        console.log(`页面 ${pageNumber} 检测结果:`, {
-          tables: tables.length,
-          images: images.length,
-          total: annotations.length
-        })
+        console.log(`页面 ${pageNumber} 检测结果:`, { images: images.length, total: annotations.length })
 
         setParsedByPage(prev => ({ ...prev, [pageNumber]: annotations }))
         setBasePageSize(prev => ({ ...prev, [pageNumber]: { width: viewport.width, height: viewport.height } }))
@@ -1671,11 +1933,11 @@ const InteractivePDFViewer = ({ file }) => {
     return union > 0 ? inter / union : 0
   }
 
-  // 专门针对图片/表格等视觉块的匹配函数
+  // 专门针对图片等视觉块的匹配函数（表格已禁用）
   const matchVisualAnnotation = (areaOrPoint) => {
     const anns = parsedByPage[pageNumber] || []
-    // 只关注图片和表格类型
-    const imageAnns = anns.filter(ann => ann.type === 'image' || ann.type === 'table')
+    // 只关注图片类型
+    const imageAnns = anns.filter(ann => ann.type === 'image')
     
     if (imageAnns.length === 0) {
       return null
@@ -1751,7 +2013,7 @@ const InteractivePDFViewer = ({ file }) => {
 
   // 通用匹配函数（保留原有逻辑但简化）
   const matchAnnotation = (areaOrPoint) => {
-    // 优先尝试匹配图片/表格等视觉块
+    // 优先尝试匹配图片等视觉块
     const imageMatch = matchVisualAnnotation(areaOrPoint)
     if (imageMatch) {
       return imageMatch
@@ -1970,8 +2232,9 @@ const InteractivePDFViewer = ({ file }) => {
                   const heightScale = availableHeight / pdfHeight
                   
                   // 选择较小的缩放比例，确保页面完全可见，同时整体放大1.5倍
+                  // 略微缩小整体显示比例
                   const optimalScale = Math.min(widthScale, heightScale, 1.6)
-                  const finalScale = Math.min(Math.max(optimalScale * 1.5, 0.5), 2.0)
+                  const finalScale = Math.min(Math.max(optimalScale * 1.3, 0.5), 1.8)
                   
                   console.log('PDF内容尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
                   console.log('最终缩放比例:', finalScale)
@@ -2278,7 +2541,7 @@ const InteractivePDFViewer = ({ file }) => {
             if (matched) {
               return (
                 <div style={{ padding: '6px 12px', fontSize: 12, color: '#6c757d' }}>
-                  {matched.type === 'image' || matched.type === 'table' ? `关联到：${matched.name || (matched.type === 'table' ? '表格' : '图片')}` : `关联块: 文本`}
+                  {matched.type === 'image' ? `关联到：${matched.name || '图片'}` : `关联块: 文本`}
                 </div>
               )
             }

@@ -173,6 +173,53 @@ npm run dev
 - react-pdf
 - PDF.js
 
+## 编辑器 3.0（PP-Structure 覆盖）
+
+新增组件 `InteractivePDFViewer3` 支持两层渲染（canvas + textLayer）并叠加 PP-StructureV2 的块框。
+
+### 前端使用
+
+- 侧栏新增“🧩 编辑器 3.0”标签。
+- 上传 PDF 后，点击“⚙️ 使用本地 PP-Structure 解析”将文件提交到本地后端解析；解析完成后前端会把返回的块框以半透明框覆盖在 PDF 上。
+- 可点击“⬇️ 下载 JSON”获取对应解析结果。
+
+### 启动后端（开发）
+
+后端是一个简单的 Express 服务，提供两个接口：
+
+- `POST /api/pp-parse`：接收 PDF（表单字段名 `file`），调用本地解析器（若配置），返回 JSON 结果与 `jobId`。
+- `GET /api/pp-parse/:id.json`：按 `jobId` 返回上一次解析生成的 JSON。
+
+开发启动：
+
+1. 安装依赖：`npm install`
+2. 启动后端：`npm run server`（默认端口 8787）
+3. 启动前端：`npm run dev`
+
+Vite 已配置代理，把 `/api` 请求代理到 `http://localhost:8787`。
+
+### 配置本地 PP-StructureV2
+
+后端通过环境变量 `PP_STRUCTURE_CMD` 调用实际的解析程序，例如：
+
+```
+PP_STRUCTURE_CMD="python server/pp_structure_runner.py" npm run server
+```
+
+默认的 `server/pp_structure_runner.py` 是一个占位脚本，只输出空 JSON。你可以替换为真实的 PP-StructureV2 调用逻辑，要求：
+
+- 接受 `--input <pdf>` 与 `--output <json>` 参数；
+- 把每页的块框写入 `<json>` 文件，结构例如：
+
+```json
+{
+  "1": [ { "type": "figure", "bbox": [x1,y1,x2,y2], "img_size": [W,H] }, ... ],
+  "2": [ ... ]
+}
+```
+
+其中 bbox 坐标可用“页面图像像素坐标”（默认）或“PDF 页面坐标”，对应前端 `ppCoordType` 为 `'image'` 或 `'pdf'`。
+
 ## 注意事项
 
 - 大文件解析可能需要较长时间
