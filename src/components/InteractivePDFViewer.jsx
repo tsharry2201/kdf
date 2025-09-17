@@ -24,6 +24,9 @@ const InteractivePDFViewer = ({ file }) => {
   const [currentTargetBlock, setCurrentTargetBlock] = useState(null) // { type: 'text'|'image', area, text? }
   const [pdfDoc, setPdfDoc] = useState(null)
   const [parsedByPage, setParsedByPage] = useState({}) // { [pageNumber]: Annotation[] }
+  const [lpBlocksByPage, setLpBlocksByPage] = useState(null) // 后端(LP+PubLayNet)返回的原始结果
+  const [lpParsing, setLpParsing] = useState(false)
+  const [lpError, setLpError] = useState(null)
   const [basePageSize, setBasePageSize] = useState({}) // { [pageNumber]: { width, height } }
   const [associatedImages, setAssociatedImages] = useState([]) // 新增：关联的图片
   const [showDebugBounds, setShowDebugBounds] = useState(false) // 调试：显示解析块边界
@@ -57,6 +60,36 @@ const InteractivePDFViewer = ({ file }) => {
     console.error('交互式编辑器PDF加载失败:', error)
     setError('加载PDF文件失败: ' + error.message)
     setLoading(false)
+  }
+
+  // 下载JSON（优先下载后端PubLayNet返回的结果）
+  const downloadDetectionsJSON = () => {
+    try {
+      let exportData = null
+      if (lpBlocksByPage && Object.keys(lpBlocksByPage).length > 0) {
+        exportData = lpBlocksByPage
+      } else if (parsedByPage && Object.keys(parsedByPage).length > 0) {
+        // 回退：导出当前内存中的标注（容器像素坐标）
+        exportData = parsedByPage
+      } else {
+        alert('暂无可导出的检测结果')
+        return
+      }
+      const jsonData = JSON.stringify(exportData, null, 2)
+      const blob = new Blob([jsonData], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const base = (file?.name || 'document').replace(/\.pdf$/i, '')
+      a.href = url
+      a.download = `${base}_detections.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('导出JSON失败:', e)
+      alert('导出JSON失败: ' + (e?.message || e))
+    }
   }
 
   const goToPrevPage = () => {
@@ -379,6 +412,10 @@ const InteractivePDFViewer = ({ file }) => {
     setHighlights([])
     setAttachments([])
     setAssociatedImages([]) // 重置关联图片
+    setParsedByPage({})
+    setLpBlocksByPage(null)
+    setLpParsing(false)
+    setLpError(null)
     
     // 文件健康检查
     if (file) {
@@ -397,6 +434,28 @@ const InteractivePDFViewer = ({ file }) => {
         setLoading(false)
         return
       }
+      // 触发后端解析（LayoutParser + PubLayNet）
+      ;(async () => {
+        try {
+          setLpParsing(true)
+          setLpError(null)
+          const fd = new FormData()
+          fd.append('file', file)
+          const resp = await fetch('/api/pp-parse', { method: 'POST', body: fd })
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}))
+            throw new Error(err?.detail || `后端解析失败(${resp.status})`)
+          }
+          const data = await resp.json()
+          // data: { jobId, blocksByPage }
+          setLpBlocksByPage(data?.blocksByPage || {})
+        } catch (e) {
+          console.error('后端PubLayNet解析失败:', e)
+          setLpError(String(e?.message || e))
+        } finally {
+          setLpParsing(false)
+        }
+      })()
     } else {
       setLoading(false)
     }
@@ -419,7 +478,7 @@ const InteractivePDFViewer = ({ file }) => {
     }
   }, [pageScale, pageNumber, basePageSize])
 
-  // 解析当前页，生成与解析器一致的块（文本合并+图片占位）
+  // 解析当前页（优先使用后端 LayoutParser + PubLayNet 结果）
   useEffect(() => {
     const parseCurrentPage = async () => {
       if (!pdfDoc || !pageNumber) return
@@ -428,6 +487,56 @@ const InteractivePDFViewer = ({ file }) => {
         
         // 使用CropBox的viewport，确保坐标系一致
         const viewport = page.getViewport({ scale: 1.0, useCropBox: true })
+
+        // 如果已有后端解析结果，则直接映射为容器像素坐标并返回
+        const pageKey = String(pageNumber)
+        const lpBlocks = lpBlocksByPage && (lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber])
+        if (lpBlocks && Array.isArray(lpBlocks)) {
+          // 定位页面在容器内的偏移
+          const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
+          const pdfPageElement = pageWrapperRef.current?.querySelector('.react-pdf__Page')
+          const pageRect = pdfPageElement?.getBoundingClientRect()
+          const offsetX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
+          const offsetY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
+
+          // 记录基础尺寸，便于调试边界框
+          setBasePageSize(prev => ({ ...prev, [pageNumber]: { width: viewport.width, height: viewport.height } }))
+
+          // 采用 img_size 进行尺度换算；缺失时按 dpi=200 估算
+          const fallbackDpi = 200
+          const [imgWEst, imgHEst] = [Math.round(viewport.width * (fallbackDpi / 72)), Math.round(viewport.height * (fallbackDpi / 72))]
+          const imgW = (lpBlocks?.[0]?.img_size?.[0]) || imgWEst
+          const imgH = (lpBlocks?.[0]?.img_size?.[1]) || imgHEst
+          const sX = viewport.width / Math.max(1, imgW)
+          const sY = viewport.height / Math.max(1, imgH)
+
+          const mapType = (t) => {
+            const k = (t || '').toLowerCase()
+            if (k === 'table') return 'table'
+            if (k === 'figure' || k === 'image' || k === 'graphic') return 'image'
+            return 'text'
+          }
+
+          const anns = (lpBlocks || []).map((b, idx) => {
+            const [x1, y1, x2, y2] = b.bbox || [0, 0, 0, 0]
+            const dx = (x2 - x1)
+            const dy = (y2 - y1)
+            const pxX = offsetX + x1 * sX * pageScale
+            const pxY = offsetY + y1 * sY * pageScale
+            const pxW = Math.max(1, dx * sX * pageScale)
+            const pxH = Math.max(1, dy * sY * pageScale)
+            return {
+              id: b.id || `${mapType(b.type)}_${pageNumber}_${idx + 1}`,
+              type: mapType(b.type),
+              page: pageNumber,
+              score: typeof b.score === 'number' ? b.score : undefined,
+              position: { x: Math.round(pxX), y: Math.round(pxY), width: Math.round(pxW), height: Math.round(pxH) }
+            }
+          })
+
+          setParsedByPage(prev => ({ ...prev, [pageNumber]: anns }))
+          return // 重要：已使用后端结果，跳过本地解析流程
+        }
 
         // 尝试获取CropBox/MediaBox偏移（不同pdfjs版本可能没有这些API）
         let cropOffsetX = 0
@@ -454,7 +563,7 @@ const InteractivePDFViewer = ({ file }) => {
         // 提前记录基础尺寸，避免后续步骤异常时影响调试边界显示
         setBasePageSize(prev => ({ ...prev, [pageNumber]: { width: viewport.width, height: viewport.height } }))
 
-        // 文本收集
+        // 文本收集（本地回退逻辑；默认不会走到这里）
         const textContent = await page.getTextContent()
         const textItems = []
         textContent.items.forEach((item, index) => {
@@ -2141,6 +2250,20 @@ const InteractivePDFViewer = ({ file }) => {
           title={showDebugBounds ? "隐藏调试边界" : "显示调试边界"}
         >
           {showDebugBounds ? '🔍 隐藏边界' : '🔍 显示边界'}
+        </button>
+
+        <button 
+          style={{
+            ...styles.button,
+            backgroundColor: '#17a2b8',
+            fontSize: '12px',
+            padding: '8px 12px'
+          }}
+          onClick={downloadDetectionsJSON}
+          title={'下载检测结果JSON'}
+          disabled={!(lpBlocksByPage && Object.keys(lpBlocksByPage).length) && !(parsedByPage && Object.keys(parsedByPage).length)}
+        >
+          📥 下载JSON
         </button>
 
         {/* 放大/缩小功能按需求已移除 */}

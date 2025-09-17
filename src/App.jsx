@@ -153,7 +153,7 @@ function App() {
                         setPpLoading(false)
                       }
                     }}
-                  >{ppLoading ? '解析中…' : '⚙️ 使用本地 PP-Structure 解析'}</button>
+                  >{ppLoading ? '解析中…' : '⚙️ 使用LayoutParser PubLayNet 解析'}</button>
                   <button
                     className="tab-button"
                     disabled={!ppJobId3}

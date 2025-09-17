@@ -1,9 +1,5 @@
-import paddleocr, os
-print(paddleocr.__file__)   # 打印 paddlex 安装路径
+import layoutparser as lp
 
-# 列出安装目录下的文件
-import os
-base = os.path.dirname(paddleocr.__file__)
-for root, dirs, files in os.walk(base):
-    print(root, "->", dirs, files)
-    break  # 只看第一层
+# 尝试导入类（不报错即表示安装成功）
+from layoutparser.models.detectron2.layoutmodel import Detectron2LayoutModel
+print("Detectron2LayoutModel 导入成功")

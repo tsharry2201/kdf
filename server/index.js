@@ -55,10 +55,10 @@ function resolvePythonBin() {
   if (process.env.PP_PY_BIN && process.env.PP_PY_BIN.trim()) {
     candidates.push(process.env.PP_PY_BIN.trim())
   }
-  // 固定绝对路径（按你最新截图首选此解释器）
-  //candidates.push("E:\\\\conda_envs\\\\pytorch_env\\\\python.exe")
+  // 固定绝对路径（在此安装）
+  candidates.push("E:\\\\conda_envs\\\\pytorch_env\\\\python.exe")
   // 兼容正斜杠写法
-  //candidates.push('E:/conda_envs/pytorch_env/python.exe')
+  candidates.push('E:/conda_envs/pytorch_env/python.exe')
   // 历史候选：旧 anaco 解释器（保留以便 fallback）
   candidates.push('E:\\anaco\\python.exe')
   candidates.push('E:/anaco/python.exe')
@@ -88,10 +88,7 @@ function buildParseCommand(pdfPath, outPath) {
     const parts = tokens.map(unquote)
     const bin = parts[0]
     const baseArgs = parts.slice(1)
-    // 为诊断追加 debug 目录
-    const debugDir = path.join(dataDir, path.basename(outPath, '.json') + '_debug')
-    fs.mkdirSync(debugDir, { recursive: true })
-    const args = [...baseArgs, '--input', pdfPath, '--output', outPath, '--debug-dir', debugDir]
+    const args = [...baseArgs, '--input', pdfPath, '--output', outPath]
     const useShell = false
     return { bin, args, shell: useShell, info: `env:${envCmd}` }
   }
@@ -99,10 +96,8 @@ function buildParseCommand(pdfPath, outPath) {
   const bin = resolvePythonBin()
   // 使用绝对路径，避免 cwd 变化导致找不到脚本
   const scriptPath = path.join(__dirname, 'pp_structure_runner.py')
-  const debugDir = path.join(dataDir, path.basename(outPath, '.json') + '_debug')
-  fs.mkdirSync(debugDir, { recursive: true })
-  const args = [scriptPath, '--input', pdfPath, '--output', outPath, '--debug-dir', debugDir]
-  return { bin, args, shell: false, info: `default:${bin} ${scriptPath} debug:${debugDir}` }
+  const args = [scriptPath, '--input', pdfPath, '--output', outPath]
+  return { bin, args, shell: false, info: `default:${bin} ${scriptPath}` }
 }
 
 app.post('/api/pp-parse', upload.single('file'), async (req, res) => {

@@ -1,0 +1,178 @@
+[
+  {
+    "class": "page-footer",
+    "confidence": 0.9604405760765076,
+    "bbox": [
+      265,
+      988,
+      1181,
+      1769
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.9547051191329956,
+    "bbox": [
+      1328,
+      2576,
+      2327,
+      2934
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.9504908323287964,
+    "bbox": [
+      1329,
+      1513,
+      2325,
+      2560
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.9497394561767578,
+    "bbox": [
+      223,
+      1916,
+      1221,
+      2226
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.9458998441696167,
+    "bbox": [
+      224,
+      2235,
+      1220,
+      2637
+    ],
+    "page": 1
+  },
+  {
+    "class": "footnote",
+    "confidence": 0.8883020877838135,
+    "bbox": [
+      1346,
+      899,
+      2305,
+      1219
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.8663851022720337,
+    "bbox": [
+      224,
+      2647,
+      1222,
+      2776
+    ],
+    "page": 1
+  },
+  {
+    "class": "formula",
+    "confidence": 0.8024060726165771,
+    "bbox": [
+      586,
+      1846,
+      858,
+      1893
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.7814257144927979,
+    "bbox": [
+      224,
+      2816,
+      1216,
+      2935
+    ],
+    "page": 1
+  },
+  {
+    "class": "formula",
+    "confidence": 0.7463523149490356,
+    "bbox": [
+      643,
+      911,
+      799,
+      949
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.7462526559829712,
+    "bbox": [
+      341,
+      626,
+      2210,
+      711
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-header",
+    "confidence": 0.6588190793991089,
+    "bbox": [
+      247,
+      410,
+      2316,
+      466
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.6003695726394653,
+    "bbox": [
+      1328,
+      1264,
+      2321,
+      1392
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-header",
+    "confidence": 0.5891121029853821,
+    "bbox": [
+      626,
+      544,
+      1940,
+      593
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-header",
+    "confidence": 0.32973068952560425,
+    "bbox": [
+      741,
+      144,
+      1805,
+      183
+    ],
+    "page": 1
+  },
+  {
+    "class": "page-footer",
+    "confidence": 0.31323567032814026,
+    "bbox": [
+      741,
+      145,
+      1799,
+      183
+    ],
+    "page": 1
+  }
+]
