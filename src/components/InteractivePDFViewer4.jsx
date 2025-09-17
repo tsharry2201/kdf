@@ -7,7 +7,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
 
-const InteractivePDFViewer = ({ file }) => {
+const InteractivePDFViewer4 = ({ file }) => {
   const [numPages, setNumPages] = useState(null)
   const [pageNumber, setPageNumber] = useState(1)
   const [loading, setLoading] = useState(true)
@@ -440,8 +440,8 @@ const InteractivePDFViewer = ({ file }) => {
           setLpParsing(true)
           setLpError(null)
           const fd = new FormData()
-          fd.append('file', file)
-          const resp = await fetch('/api/pp-parse', { method: 'POST', body: fd })
+          fd.append('files', file)
+          const resp = await fetch('http://127.0.0.1:8082/api/file_parse', { method: 'POST', body: fd })
           if (!resp.ok) {
             const err = await resp.json().catch(() => ({}))
             throw new Error(err?.detail || `后端解析失败(${resp.status})`)
@@ -2942,4 +2942,4 @@ const styles = {
   }
 }
 
-export default InteractivePDFViewer
+export default InteractivePDFViewer4
