@@ -7,6 +7,126 @@ import * as pdfjsLib from 'pdfjs-dist'
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
 
+const toPositiveNumber = (value) => {
+  const num = Number(value)
+  return Number.isFinite(num) && num > 0 ? num : null
+}
+
+const clampNumber = (value, min, max) => {
+  if (!Number.isFinite(value)) return min
+  return Math.min(max, Math.max(min, value))
+}
+
+const adjustRectWithTuning = (rect, tuning) => {
+  if (!rect) return rect
+  const scaleX = Number.isFinite(tuning?.scaleX) ? tuning.scaleX : 1
+  const scaleY = Number.isFinite(tuning?.scaleY) ? tuning.scaleY : 1
+  const expandX = Number.isFinite(tuning?.expandX) ? tuning.expandX : 0
+  const expandY = Number.isFinite(tuning?.expandY) ? tuning.expandY : 0
+  const offsetX = Number.isFinite(tuning?.offsetX) ? tuning.offsetX : 0
+  const offsetY = Number.isFinite(tuning?.offsetY) ? tuning.offsetY : 0
+  const anchorX = Number.isFinite(tuning?.anchorX) ? tuning.anchorX : 0
+  const anchorY = Number.isFinite(tuning?.anchorY) ? tuning.anchorY : 0
+
+  let sx = scaleX
+  let sy = scaleY
+  if (tuning?.uniform) {
+    const uniformScale = Math.min(sx, sy)
+    sx = uniformScale
+    sy = uniformScale
+  }
+
+  const baseWidth = rect.width ?? 0
+  const baseHeight = rect.height ?? 0
+  const scaledWidth = Math.max(1, baseWidth * sx + expandX)
+  const scaledHeight = Math.max(1, baseHeight * sy + expandY)
+  const absWidth = Number.isFinite(tuning?.absWidth) && tuning.absWidth > 0 ? tuning.absWidth : null
+  const absHeight = Number.isFinite(tuning?.absHeight) && tuning.absHeight > 0 ? tuning.absHeight : null
+  const finalWidth = tuning?.useAbsWidth && absWidth ? absWidth : scaledWidth
+  const finalHeight = tuning?.useAbsHeight && absHeight ? absHeight : scaledHeight
+  const rawX = rect.x ?? 0
+  const rawY = rect.y ?? 0
+  const scaledX = anchorX + (rawX - anchorX) * sx
+  const scaledY = anchorY + (rawY - anchorY) * sy
+
+  return {
+    x: scaledX + offsetX,
+    y: scaledY + offsetY,
+    width: finalWidth,
+    height: finalHeight
+  }
+}
+
+const pickSizeFromBlocks = (blocks, field) => {
+  if (!Array.isArray(blocks)) return null
+  for (const block of blocks) {
+    const raw = block?.[field]
+    if (!Array.isArray(raw) || raw.length < 2) continue
+    const width = toPositiveNumber(raw[0])
+    const height = toPositiveNumber(raw[1])
+    if (width && height) {
+      return { width, height, basis: field }
+    }
+  }
+  return null
+}
+
+const measureBBoxExtent = (blocks) => {
+  if (!Array.isArray(blocks)) return null
+  let maxX = 0
+  let maxY = 0
+  let found = false
+  blocks.forEach(block => {
+    const bbox = Array.isArray(block?.bbox) && block.bbox.length >= 4 ? block.bbox : null
+    if (!bbox) return
+    const x2 = toPositiveNumber(bbox[2])
+    const y2 = toPositiveNumber(bbox[3])
+    if (x2 && y2) {
+      maxX = Math.max(maxX, x2)
+      maxY = Math.max(maxY, y2)
+      found = true
+    }
+  })
+  return found ? { width: maxX, height: maxY, basis: 'bbox_extents' } : null
+}
+
+const resolveSourceSize = ({ blocks, viewport, method }) => {
+  const fallback = {
+    width: viewport?.width || 0,
+    height: viewport?.height || 0,
+    basis: 'viewport'
+  }
+
+  if (method === 'direct') {
+    return { ...fallback, basis: 'direct' }
+  }
+
+  if (!Array.isArray(blocks) || !blocks.length) {
+    return fallback
+  }
+
+  const preferred = pickSizeFromBlocks(blocks, 'img_size')
+    || pickSizeFromBlocks(blocks, 'page_size')
+    || pickSizeFromBlocks(blocks, 'pageSize')
+    || pickSizeFromBlocks(blocks, 'page_dimensions')
+
+  const bboxExtent = measureBBoxExtent(blocks)
+
+  if (method === 'dpi') {
+    return bboxExtent || preferred || fallback
+  }
+
+  if (preferred) {
+    return preferred
+  }
+
+  if (bboxExtent) {
+    return bboxExtent
+  }
+
+  return fallback
+}
+
 const InteractivePDFViewer4 = ({ file }) => {
   const [numPages, setNumPages] = useState(null)
   const [pageNumber, setPageNumber] = useState(1)
@@ -31,10 +151,28 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [associatedImages, setAssociatedImages] = useState([]) // 新增：关联的图片
   const [showDebugBounds, setShowDebugBounds] = useState(false) // 调试：显示解析块边界
   const [pageScale, setPageScale] = useState(1) // PDF页面缩放比例
+  const [coordinateMethod, setCoordinateMethod] = useState('auto') // 坐标转换方法：'auto', 'direct', 'dpi'
+  const [manualOffset, setManualOffset] = useState({ x: -2, y: -1 }) // 手动调整偏移
+  const [usePageScale, setUsePageScale] = useState(true) // 是否使用pageScale
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
   const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean } }
   const videoRefs = useRef({}) // 保持每个视频的ref
   const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
+  const [bboxTuning, setBBoxTuning] = useState({
+    scaleX: 0.91,
+    scaleY: 1.18,
+    offsetX: 0,
+    offsetY: 0,
+    expandX: 0,
+    expandY: 0,
+    uniform: false,
+    anchorX: 0,
+    anchorY: 0,
+    useAbsWidth: false,
+    useAbsHeight: false,
+    absWidth: null,
+    absHeight: null
+  })
   const attachmentsRef = useRef([])
 
   const pageRef = useRef(null) // 保留：外层容器
@@ -441,7 +579,12 @@ const InteractivePDFViewer4 = ({ file }) => {
           setLpError(null)
           const fd = new FormData()
           fd.append('files', file)
-          const resp = await fetch('http://127.0.0.1:8082/api/file_parse', { method: 'POST', body: fd })
+          fd.append('return_content_list', 'true')
+          fd.append('return_md', 'false')
+          fd.append('return_layout', 'false')
+          fd.append('return_middle_json', 'false')
+          fd.append('return_model_output', 'false')
+          const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
           if (!resp.ok) {
             const err = await resp.json().catch(() => ({}))
             throw new Error(err?.detail || `后端解析失败(${resp.status})`)
@@ -492,24 +635,129 @@ const InteractivePDFViewer4 = ({ file }) => {
         // 如果已有后端解析结果，则直接映射为容器像素坐标并返回
         const pageKey = String(pageNumber)
         const lpBlocks = lpBlocksByPage && (lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber])
+        console.log('后端数据检查:', {
+          lpBlocksByPage: lpBlocksByPage,
+          pageKey,
+          pageNumber,
+          lpBlocks: lpBlocks,
+          lpBlocksLength: lpBlocks ? lpBlocks.length : 'null'
+        })
         if (lpBlocks && Array.isArray(lpBlocks)) {
           // 定位页面在容器内的偏移
+          console.log("using backend results...")
+          await new Promise(resolve => requestAnimationFrame(resolve))
+
           const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
           const pdfPageElement = pageWrapperRef.current?.querySelector('.react-pdf__Page')
+          const canvasLayer = pdfPageElement?.querySelector('.react-pdf__Page__canvas')
+          const canvasRect = canvasLayer?.getBoundingClientRect()
+          const textLayer = pdfPageElement?.querySelector('.react-pdf__Page__textContent')
+          const textRect = textLayer?.getBoundingClientRect()
+          const annotationLayer = pdfPageElement?.querySelector('.react-pdf__Page__annotations')
+          const annotationRect = annotationLayer?.getBoundingClientRect()
           const pageRect = pdfPageElement?.getBoundingClientRect()
-          const offsetX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
-          const offsetY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
+
+          const contentRect = canvasRect || textRect || annotationRect || pageRect
+
+          // 调试信息：显示偏移计算过程
+          console.log('偏移计算调试:', {
+            wrapperRect: wrapperRect ? { left: wrapperRect.left, top: wrapperRect.top, width: wrapperRect.width, height: wrapperRect.height } : 'null',
+            pageRect: pageRect ? { left: pageRect.left, top: pageRect.top, width: pageRect.width, height: pageRect.height } : 'null',
+            canvasRect: canvasRect ? { left: canvasRect.left, top: canvasRect.top, width: canvasRect.width, height: canvasRect.height } : 'null',
+            textRect: textRect ? { left: textRect.left, top: textRect.top, width: textRect.width, height: textRect.height } : 'null',
+            contentRect: contentRect ? { left: contentRect.left, top: contentRect.top, width: contentRect.width, height: contentRect.height } : 'null',
+            calculatedOffset: { x: contentRect && wrapperRect ? (contentRect.left - wrapperRect.left) : 0, y: contentRect && wrapperRect ? (contentRect.top - wrapperRect.top) : 0 }
+          })
+
+          // 尝试多种偏移计算方法
+          let offsetX = 0, offsetY = 0
+
+          if (contentRect && wrapperRect) {
+            // 方法1：使用getBoundingClientRect差值
+            offsetX = contentRect.left - wrapperRect.left
+            offsetY = contentRect.top - wrapperRect.top
+            console.log('方法1 - getBoundingClientRect差值:', { offsetX, offsetY })
+          }
+
+          // 方法2：检查是否有CSS变换或边距影响
+          const computedStyle = pdfPageElement ? window.getComputedStyle(pdfPageElement) : null
+          if (computedStyle) {
+            const marginLeft = parseFloat(computedStyle.marginLeft) || 0
+            const marginTop = parseFloat(computedStyle.marginTop) || 0
+            const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0
+            const paddingTop = parseFloat(computedStyle.paddingTop) || 0
+            
+            console.log('CSS样式信息:', {
+              marginLeft, marginTop, paddingLeft, paddingTop,
+              transform: computedStyle.transform,
+              position: computedStyle.position
+            })
+            
+            // 如果偏移看起来异常，尝试使用CSS值
+            if (Math.abs(offsetX) > 100 || Math.abs(offsetY) > 100) {
+              offsetX = marginLeft + paddingLeft
+              offsetY = marginTop + paddingTop
+              console.log('方法2 - 使用CSS值:', { offsetX, offsetY })
+            }
+          }
+          
+          // 方法3：如果前两种方法都失败，使用0偏移
+          if (isNaN(offsetX) || isNaN(offsetY)) {
+            offsetX = 0
+            offsetY = 0
+            console.log('方法3 - 使用0偏移')
+          }
+          
+          // 应用手动调整偏移
+          const finalOffsetX = offsetX + manualOffset.x
+          const finalOffsetY = offsetY + manualOffset.y
+          
+          console.log('偏移计算完成:', {
+            calculatedOffset: { offsetX, offsetY },
+            manualAdjustment: manualOffset,
+            finalOffset: { x: finalOffsetX, y: finalOffsetY }
+          })
+          
+          // 更新变量名以使用最终偏移值
+          offsetX = finalOffsetX
+          offsetY = finalOffsetY
 
           // 记录基础尺寸，便于调试边界框
           setBasePageSize(prev => ({ ...prev, [pageNumber]: { width: viewport.width, height: viewport.height } }))
 
-          // 采用 img_size 进行尺度换算；缺失时按 dpi=200 估算
-          const fallbackDpi = 200
-          const [imgWEst, imgHEst] = [Math.round(viewport.width * (fallbackDpi / 72)), Math.round(viewport.height * (fallbackDpi / 72))]
-          const imgW = (lpBlocks?.[0]?.img_size?.[0]) || imgWEst
-          const imgH = (lpBlocks?.[0]?.img_size?.[1]) || imgHEst
-          const sX = viewport.width / Math.max(1, imgW)
-          const sY = viewport.height / Math.max(1, imgH)
+          // 重新设计：以PDF页面实际渲染尺寸为基准
+          const effectiveScale = usePageScale ? (pageScale || 1) : 1
+          const pdfRenderWidth = contentRect?.width || (viewport.width * effectiveScale)
+          const pdfRenderHeight = contentRect?.height || (viewport.height * effectiveScale)
+
+          const targetWidth = Math.max(1, pdfRenderWidth)
+          const targetHeight = Math.max(1, pdfRenderHeight)
+          const sourceInfo = resolveSourceSize({
+            blocks: lpBlocks,
+            viewport,
+            method: coordinateMethod
+          })
+
+          let sX = targetWidth / Math.max(1, sourceInfo.width)
+          let sY = targetHeight / Math.max(1, sourceInfo.height)
+
+          if (sourceInfo.basis === 'bbox_extents') {
+            const ratio = Math.max(sX, sY) / Math.max(1e-6, Math.min(sX, sY))
+            if (ratio > 1.2) {
+              const uniformScale = Math.min(sX, sY)
+              console.log('bbox尺度差异过大，采用统一缩放', { sX, sY, uniformScale, sourceInfo, targetSize: { width: targetWidth, height: targetHeight } })
+              sX = uniformScale
+              sY = uniformScale
+            }
+          }
+
+          console.log('坐标转换准备:', {
+            pageNumber,
+            source: sourceInfo,
+            targetSize: { width: targetWidth, height: targetHeight },
+            scale: { x: sX, y: sY },
+            offset: { x: offsetX, y: offsetY }
+          })
 
           const mapType = (t) => {
             const k = (t || '').toLowerCase()
@@ -518,23 +766,60 @@ const InteractivePDFViewer4 = ({ file }) => {
             return 'text'
           }
 
-          const anns = (lpBlocks || []).map((b, idx) => {
+          const annsRaw = (lpBlocks || []).map((b, idx) => {
             const [x1, y1, x2, y2] = b.bbox || [0, 0, 0, 0]
             const dx = (x2 - x1)
             const dy = (y2 - y1)
-            const pxX = offsetX + x1 * sX * pageScale
-            const pxY = offsetY + y1 * sY * pageScale
-            const pxW = Math.max(1, dx * sX * pageScale)
-            const pxH = Math.max(1, dy * sY * pageScale)
+            // 坐标转换：bbox -> PDF渲染坐标
+            // 直接映射到PDF页面的渲染坐标系统
+            const pxX = offsetX + x1 * sX
+            const pxY = offsetY + y1 * sY
+            const pxW = Math.max(1, dx * sX)
+            const pxH = Math.max(1, dy * sY)
+            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
+
+            // 调试信息：显示前几个框的坐标转换过程
+            if (idx < 3) {
+              console.log(`框 ${idx + 1} 坐标转换:`, {
+                originalBbox: [x1, y1, x2, y2],
+                scale: { x: sX, y: sY },
+                offset: { x: offsetX, y: offsetY },
+                finalPosition: {
+                  x: Math.round(scaledPosition.x),
+                  y: Math.round(scaledPosition.y),
+                  width: Math.round(scaledPosition.width),
+                  height: Math.round(scaledPosition.height)
+                },
+                note: 'bbox -> PDF渲染坐标 (直接映射)'
+              })
+            }
+
             return {
               id: b.id || `${mapType(b.type)}_${pageNumber}_${idx + 1}`,
               type: mapType(b.type),
               page: pageNumber,
               score: typeof b.score === 'number' ? b.score : undefined,
-              position: { x: Math.round(pxX), y: Math.round(pxY), width: Math.round(pxW), height: Math.round(pxH) }
+              position: {
+                x: Math.round(scaledPosition.x),
+                y: Math.round(scaledPosition.y),
+                width: Math.round(scaledPosition.width),
+                height: Math.round(scaledPosition.height)
+              }
             }
           })
 
+          const anns = annsRaw.filter(a => a.type === 'image')
+
+          console.log('边界框渲染结果:', {
+            pageNumber,
+            annsCount: anns.length,
+            firstFewAnns: anns.slice(0, 3).map(a => ({
+              id: a.id,
+              type: a.type,
+              position: a.position
+            }))
+          })
+          
           setParsedByPage(prev => ({ ...prev, [pageNumber]: anns }))
           return // 重要：已使用后端结果，跳过本地解析流程
         }
@@ -760,14 +1045,15 @@ const InteractivePDFViewer4 = ({ file }) => {
                     pxH = Math.max(20, Math.min(pxH, tTopPx - pxY - 8))
                   }
                 }
+                const scaledRect = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
                 tables.push({
                   id: `table_${pageNumber}_0`,
                   type: 'table',
                   position: {
-                    x: Math.round(pxX * 100) / 100,
-                    y: Math.round(pxY * 100) / 100,
-                    width: Math.round(pxW * 100) / 100,
-                    height: Math.round(pxH * 100) / 100
+                    x: Math.round(scaledRect.x * 100) / 100,
+                    y: Math.round(scaledRect.y * 100) / 100,
+                    width: Math.round(scaledRect.width * 100) / 100,
+                    height: Math.round(scaledRect.height * 100) / 100
                   },
                   content: `表格区域 (${tableRows.length}行 x ${Math.max(...tableRows.map(r => r.length))}列)`,
                   rows: tableRows.length,
@@ -944,10 +1230,16 @@ const InteractivePDFViewer4 = ({ file }) => {
                 // 填充矩形通常为纯色占位，允许较低/中等文本覆盖；描边矩形倾向于空心框
                 const threshold = mode === 'fill' ? 0.35 : 0.25
                 if (cover <= threshold) {
+                  const scaledRect = adjustRectWithTuning({ x: pr.x, y: pr.y, width: pr.w, height: pr.h }, bboxTuning)
                   const candidate = {
                     id: `vector_rect_${pageNumber}_${imageCount}`,
                     type: 'image',
-                    position: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.w), height: Math.round(pr.h) },
+                    position: {
+                      x: Math.round(scaledRect.x),
+                      y: Math.round(scaledRect.y),
+                      width: Math.round(scaledRect.width),
+                      height: Math.round(scaledRect.height)
+                    },
                     content: '矩形占位',
                     description: mode === 'fill' ? '填充矩形占位' : '描边矩形占位',
                     fill: mode === 'fill' ? currentFill : undefined
@@ -1296,10 +1588,18 @@ const InteractivePDFViewer4 = ({ file }) => {
                 if (!gridLike) return
               }
 
-              images.push({
+             images.push({
                 id: `${kind}_caption_${pageNumber}_${idxBase}`,
                 type: kind === 'table' ? 'table' : 'image',
-                position: { x: Math.round(pxX), y: Math.round(pxY), width: Math.round(pxW), height: Math.round(pxH) },
+                position: (() => {
+                  const tuned = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
+                  return {
+                    x: Math.round(tuned.x),
+                    y: Math.round(tuned.y),
+                    width: Math.round(tuned.width),
+                    height: Math.round(tuned.height)
+                  }
+                })(),
                 content: `${kind} caption block`,
                 description: '基于标题→上方窗口与稀疏度的候选块（无边框增强）'
               })
@@ -1936,11 +2236,17 @@ const InteractivePDFViewer4 = ({ file }) => {
 
           if (!covered) {
             const cover = textCoverRatioInPxRect(candX, candY, candW, candH)
-            if (cover <= 0.45) {
+           if (cover <= 0.45) {
+              const tuned = adjustRectWithTuning({ x: candX, y: candY, width: candW, height: candH }, bboxTuning)
               images.push({
                 id: `image_top_right_${pageNumber}_1`,
                 type: 'image',
-                position: { x: Math.round(candX), y: Math.round(candY), width: Math.round(candW), height: Math.round(candH) },
+                position: {
+                  x: Math.round(tuned.x),
+                  y: Math.round(tuned.y),
+                  width: Math.round(tuned.width),
+                  height: Math.round(tuned.height)
+                },
                 content: '右上角图片区域(兜底)',
                 description: '自动兜底定位矩形（右上角）',
                 isFallback: true
@@ -2028,7 +2334,7 @@ const InteractivePDFViewer4 = ({ file }) => {
       }
     }
     parseCurrentPage()
-  }, [pdfDoc, pageNumber, pageScale])
+  }, [pdfDoc, pageNumber, pageScale, lpBlocksByPage, manualOffset, coordinateMethod, usePageScale, bboxTuning])
 
   // 工具：计算矩形交叠IoU
   const rectIoU = (a, b) => {
@@ -2266,6 +2572,44 @@ const InteractivePDFViewer4 = ({ file }) => {
         >
           📥 下载JSON
         </button>
+
+        {/* 坐标转换方法选择器 */}
+        <select
+          value={coordinateMethod}
+          onChange={(e) => setCoordinateMethod(e.target.value)}
+          style={{
+            padding: '8px 12px',
+            backgroundColor: '#2196F3',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            marginLeft: '8px'
+          }}
+          title={'选择坐标转换方法'}
+        >
+          <option value="auto">自动（PDF尺寸）</option>
+          <option value="direct">PDF尺寸</option>
+          <option value="dpi">bbox推断</option>
+        </select>
+
+        {/* 手动调整偏移 (隐藏) */}
+        <div style={{ display: 'none' }} />
+
+        {/* 方框缩放设置 (隐藏) */}
+        <div style={{ display: 'none' }} />
+
+        {/* pageScale开关 */}
+        <label style={{ marginLeft: '8px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'white' }}>
+          <input
+            type="checkbox"
+            checked={usePageScale}
+            onChange={(e) => setUsePageScale(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          使用pageScale
+        </label>
 
         {/* 放大/缩小功能按需求已移除 */}
 
@@ -2555,7 +2899,17 @@ const InteractivePDFViewer4 = ({ file }) => {
               const anns = parsedByPage[pageNumber] || []
               const base = basePageSize[pageNumber]
               
-              if (!base) return null
+              console.log('边界框渲染检查:', {
+                showDebugBounds,
+                annsCount: anns.length,
+                base,
+                pageNumber
+              })
+              
+              if (!base) {
+                console.log('没有basePageSize，跳过边界框渲染')
+                return null
+              }
               
               const overlays = []
 
