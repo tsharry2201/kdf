@@ -750,7 +750,7 @@ const InteractivePDFViewer4 = ({ file }) => {
               sY = uniformScale
             }
           }
-
+          sX = sY = 0.8
           console.log('坐标转换准备:', {
             pageNumber,
             source: sourceInfo,
@@ -808,7 +808,7 @@ const InteractivePDFViewer4 = ({ file }) => {
             }
           })
 
-          const anns = annsRaw.filter(a => a.type === 'image')
+          const anns = annsRaw.filter(a => a.type !== 'text')
 
           console.log('边界框渲染结果:', {
             pageNumber,
@@ -2353,7 +2353,7 @@ const InteractivePDFViewer4 = ({ file }) => {
   const matchVisualAnnotation = (areaOrPoint) => {
     const anns = parsedByPage[pageNumber] || []
     // 只关注图片类型
-    const imageAnns = anns.filter(ann => ann.type === 'image')
+    const imageAnns = anns.filter(ann => ann.type !== 'text')
     
     if (imageAnns.length === 0) {
       return null
