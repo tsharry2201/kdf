@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
 // CSS样式已在App.css中定义
@@ -750,7 +750,7 @@ const InteractivePDFViewer4 = ({ file }) => {
               sY = uniformScale
             }
           }
-          sX = sY = 0.8
+          sX = sY = 0.86
           console.log('坐标转换准备:', {
             pageNumber,
             source: sourceInfo,
@@ -808,7 +808,7 @@ const InteractivePDFViewer4 = ({ file }) => {
             }
           })
 
-          const anns = annsRaw.filter(a => a.type !== 'text')
+          const anns = annsRaw.filter(a => !a.id.startsWith('text'))
 
           console.log('边界框渲染结果:', {
             pageNumber,
@@ -2353,7 +2353,7 @@ const InteractivePDFViewer4 = ({ file }) => {
   const matchVisualAnnotation = (areaOrPoint) => {
     const anns = parsedByPage[pageNumber] || []
     // 只关注图片类型
-    const imageAnns = anns.filter(ann => ann.type !== 'text')
+    const imageAnns = anns.filter(a => !a.id.startsWith('text'))
     
     if (imageAnns.length === 0) {
       return null
