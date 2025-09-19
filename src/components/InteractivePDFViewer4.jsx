@@ -158,6 +158,7 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean } }
   const videoRefs = useRef({}) // 保持每个视频的ref
   const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
+  const [hoveredAnnId, setHoveredAnnId] = useState(null) // 悬浮中的图/表块
   const [bboxTuning, setBBoxTuning] = useState({
     scaleX: 0.91,
     scaleY: 1.18,
@@ -369,6 +370,20 @@ const InteractivePDFViewer4 = ({ file }) => {
     setShowContextMenu(false)
   }
 
+  // 直接针对指定的图/表块触发上传（与右键一致）
+  const uploadForAnnotation = (ann) => {
+    if (!ann || !ann.position) return
+    setCurrentTargetBlock({
+      type: ann.type || 'image',
+      area: ann.position,
+      text: ann.content,
+      targetId: ann.id,
+      targetName: ann.name
+    })
+    fileInputRef.current?.click()
+    setShowContextMenu(false)
+  }
+
   // 处理文件上传
   const handleFileUpload = async (event) => {
     const uploadedFile = event.target.files[0]
@@ -380,12 +395,13 @@ const InteractivePDFViewer4 = ({ file }) => {
       // 模拟文件上传过程
       await new Promise(resolve => setTimeout(resolve, 1500))
       
-      // 模拟上传成功/失败
-      const isSuccess = Math.random() > 0.3 // 70% 成功率
+      // 强制上传成功（取消失败的可能性）
+      const isSuccess = true
       
       if (isSuccess) {
         const isVideo = (uploadedFile.type && uploadedFile.type.startsWith('video/')) || /\.(mp4|webm|ogg|mov|m4v)$/i.test(uploadedFile.name || '')
         const isImage = (uploadedFile.type && uploadedFile.type.startsWith('image/')) || /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(uploadedFile.name || '')
+        
         const newAttachment = {
           id: `attachment_${Date.now()}`,
           pageNumber,
@@ -441,12 +457,26 @@ const InteractivePDFViewer4 = ({ file }) => {
         if (id !== attId && v && !v.paused) v.pause()
       })
       el.play()
-      setVideoStates(prev => ({ ...prev, [attId]: { playing: true } }))
+      setVideoStates(prev => ({ 
+        ...prev, 
+        [attId]: { 
+          ...prev[attId], 
+          playing: true, 
+          hasStarted: true 
+        } 
+      }))
     } else {
       el.pause()
-      setVideoStates(prev => ({ ...prev, [attId]: { playing: false } }))
+      setVideoStates(prev => ({ 
+        ...prev, 
+        [attId]: { 
+          ...prev[attId], 
+          playing: false 
+        } 
+      }))
     }
   }
+
 
   // 切换图片铺放模式（cover/contain）
   const toggleImageFit = (attId) => {
@@ -2739,8 +2769,7 @@ const InteractivePDFViewer4 = ({ file }) => {
                     left: highlight.area.x,
                     top: highlight.area.y,
                     width: highlight.area.width,
-                    height: highlight.area.height,
-                    backgroundColor: highlight.color
+                    height: highlight.area.height
                   }}
                   title={`高亮: "${highlight.text}"`}
                 />
@@ -2765,12 +2794,13 @@ const InteractivePDFViewer4 = ({ file }) => {
                 </div>
               ))}
 
-            {/* 视频覆盖块：恰好覆盖识别区，点击播放/暂停 */}
+            {/* 视频覆盖块：在原始PDF上覆盖控制图标，点击时才渲染视频 */}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
               .map(att => {
                 const area = att.area
-                const playing = !!videoStates[att.id]?.playing
+                const isPlaying = videoStates[att.id]?.playing
+                const hasStartedPlaying = videoStates[att.id]?.hasStarted
                 return (
                   <div
                     key={`video_${att.id}`}
@@ -2780,31 +2810,100 @@ const InteractivePDFViewer4 = ({ file }) => {
                       top: area.y,
                       width: area.width,
                       height: area.height,
-                      zIndex: 12,
+                      zIndex: 999, // 大幅提高z-index，确保在最上层
                       overflow: 'hidden',
-                      borderRadius: 4,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                      borderRadius: hasStartedPlaying ? 4 : 0,
+                      boxShadow: 'none', // 移除阴影效果
+                      // 初始状态：透明背景，让原始PDF内容显示
+                      background: hasStartedPlaying ? '#000' : 'transparent',
+                      cursor: 'pointer' // 添加指针样式
                     }}
-                    onClick={(e) => { e.stopPropagation(); toggleVideoPlay(att.id) }}
-                    title={`${att.fileName}（点击${playing ? '暂停' : '播放'}）`}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      console.log('视频点击事件触发', { hasStartedPlaying, attId: att.id })
+                      
+                      if (!hasStartedPlaying) {
+                        // 首次点击，开始播放视频
+                        console.log('开始播放视频')
+                        setVideoStates(prev => ({ 
+                          ...prev, 
+                          [att.id]: { playing: true, hasStarted: true } 
+                        }))
+                        // 延迟一点让video元素先渲染
+                        setTimeout(() => {
+                          const videoEl = videoRefs.current[att.id]
+                          console.log('尝试播放视频元素', videoEl)
+                          if (videoEl) {
+                            videoEl.play().then(() => {
+                              console.log('视频播放成功')
+                            }).catch(e => {
+                              console.error('视频播放失败:', e)
+                            })
+                          }
+                        }, 100)
+                      } else {
+                        // 后续点击，切换播放/暂停
+                        console.log('切换播放状态')
+                        toggleVideoPlay(att.id)
+                      }
+                    }}
+                    title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
                   >
+                    {/* 控制按钮 */}
                     <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
                       <button style={styles.overlayBtn} title={att.hidden ? '显示' : '隐藏'} onClick={()=>toggleAttachmentVisibility(att.id)}>{att.hidden ? '👁️' : '🙈'}</button>
                       <button style={styles.overlayBtn} title={'删除'} onClick={()=>deleteAttachment(att.id)}>🗑</button>
                     </div>
-                    <video
-                      ref={(el) => { if (el) videoRefs.current[att.id] = el }}
-                      src={att.videoUrl}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                      playsInline
-                      preload="metadata"
-                      onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: true } }))}
-                      onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: false } }))}
-                      onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { playing: false } }))}
-                    />
+                    
+                    {/* 只有开始播放后才渲染视频元素 */}
+                    {hasStartedPlaying && (
+                      <video
+                        ref={el => { if (el) videoRefs.current[att.id] = el }}
+                        src={att.videoUrl}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          display: 'block'
+                        }}
+                        muted
+                        playsInline
+                        onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: true } }))}
+                        onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
+                        onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
+                      />
+                    )}
+                    
                     {/* 播放按钮覆盖层 */}
-                    {!playing && (
-                      <div style={styles.videoPlayOverlay}>▶</div>
+                    {(!hasStartedPlaying || !isPlaying) && (
+                      <div 
+                        style={{
+                          ...styles.videoPlayOverlay,
+                          pointerEvents: 'none', // 让点击事件穿透到父容器
+                          zIndex: 1000 // 确保播放按钮在最上层
+                        }}
+                      >
+                        ▶
+                      </div>
+                    )}
+                    
+                    {/* 视频信息标识 */}
+                    {!hasStartedPlaying && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: 8,
+                        left: 8,
+                        background: 'rgba(0,0,0,0.7)',
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        fontSize: '11px',
+                        pointerEvents: 'none', // 确保不阻止点击事件
+                        userSelect: 'none', // 防止文字被选中
+                        zIndex: 1001 // 确保文件标识在最上层
+                      }}>
+                        📹 {att.fileName}
+                      </div>
                     )}
                   </div>
                 )
@@ -2868,6 +2967,43 @@ const InteractivePDFViewer4 = ({ file }) => {
                   👁️
                 </button>
               ))}
+
+            {/* 悬浮于图/表区域时，显示"上传"快捷按钮（整个框内悬浮） */}
+            {(() => {
+              const anns = (parsedByPage[pageNumber] || []).filter(a => a.type === 'image' || a.type === 'table' || (!a.id?.startsWith?.('text') && a.type !== 'text'))
+              if (!anns.length) return null
+              return anns.map(ann => (
+                <div
+                  key={`hover_region_${ann.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: ann.position.x,
+                    top: ann.position.y,
+                    width: ann.position.width,
+                    height: ann.position.height,
+                    background: 'transparent',
+                    zIndex: 998 // 略低于视频层，但仍然很高
+                  }}
+                  onMouseEnter={() => setHoveredAnnId(ann.id)}
+                  onMouseLeave={() => setHoveredAnnId(prev => (prev === ann.id ? null : prev))}
+                  onClick={(e) => { e.stopPropagation() }}
+                  title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
+                >
+                  {hoveredAnnId === ann.id && (
+                    <div
+                      style={{ 
+                        ...styles.hoverBadge,
+                        right: 8,
+                        top: 8
+                      }}
+                      onClick={(e) => { e.stopPropagation(); uploadForAnnotation(ann) }}
+                    >
+                      📎 上传文件
+                    </div>
+                  )}
+                </div>
+              ))
+            })()}
 
             {/* 渲染关联的图片标记（放到与页面同层） */}
             {associatedImages
@@ -2956,9 +3092,9 @@ const InteractivePDFViewer4 = ({ file }) => {
                       width,
                       height,
                       border: ann.type === 'table' ? '3px solid green' : 
-                              ann.type === 'image' ? '3px solid blue' : '1px solid red',
-                      backgroundColor: ann.type === 'table' ? 'rgba(0,255,0,0.1)' : 
-                                      ann.type === 'image' ? 'rgba(0,0,255,0.1)' : 'rgba(255,0,0,0.05)',
+                              ann.type === 'image' ? '3px solid lightblue' : '1px solid red',
+                      backgroundColor: ann.type === 'table' ? 'rgba(0,0,0,0)' : 
+                                      ann.type === 'image' ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)',
                       pointerEvents: 'none',
                       zIndex: 15,
                       fontSize: '10px',
@@ -2968,15 +3104,6 @@ const InteractivePDFViewer4 = ({ file }) => {
                     }}
                     title={`${ann.type}: ${ann.content || ann.name}`}
                   >
-                    <div style={{ 
-                      background: 'white', 
-                      padding: '1px 3px', 
-                      borderRadius: '2px',
-                      fontSize: '8px',
-                      lineHeight: '10px'
-                    }}>
-                      {ann.type === 'text' ? '📝' : '🖼️'} {ann.id}
-                    </div>
                   </div>
                 )
               })
@@ -3073,6 +3200,7 @@ const InteractivePDFViewer4 = ({ file }) => {
           {uploadStatus.message}
         </div>
       )}
+
     </div>
   )
 }
@@ -3170,7 +3298,8 @@ const styles = {
   },
   highlight: {
     position: 'absolute',
-    opacity: 0.3,
+    border: '2px solid #66a3ff',
+    backgroundColor: 'transparent',
     cursor: 'pointer',
     pointerEvents: 'auto',
     zIndex: 10
@@ -3266,11 +3395,12 @@ const styles = {
   },
   overlayControls: {
     position: 'absolute',
-    right: 6,
+    left: 6,
     top: 6,
     display: 'flex',
+    flexDirection: 'column',
     gap: 6,
-    zIndex: 20
+    zIndex: 1002 // 提高到最上层
   },
   overlayBtn: {
     background: 'rgba(0,0,0,0.55)',
@@ -3278,10 +3408,21 @@ const styles = {
     border: 'none',
     borderRadius: 4,
     width: 26,
-    height: 22,
+    height: 26,
     cursor: 'pointer',
     fontSize: 12,
-    lineHeight: '22px'
+    lineHeight: '26px'
+  },
+  hoverBadge: {
+    position: 'absolute',
+    background: 'rgba(0,123,255,0.9)',
+    color: '#fff',
+    borderRadius: 4,
+    padding: '2px 6px',
+    fontSize: 12,
+    cursor: 'pointer',
+    zIndex: 17,
+    boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
   },
   hiddenToggle: {
     background: 'rgba(0,0,0,0.55)',
@@ -3294,6 +3435,7 @@ const styles = {
     fontSize: 12,
     lineHeight: '22px'
   }
-}
-
+}  
 export default InteractivePDFViewer4
+
+
