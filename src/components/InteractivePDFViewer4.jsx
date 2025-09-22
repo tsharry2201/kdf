@@ -128,6 +128,59 @@ const resolveSourceSize = ({ blocks, viewport, method }) => {
 }
 
 const InteractivePDFViewer4 = ({ file }) => {
+  // 添加视频进度条样式
+  useEffect(() => {
+    const style = document.createElement('style')
+    style.textContent = `
+      .video-progress-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent;
+        cursor: pointer;
+      }
+      
+      .video-progress-slider::-webkit-slider-track {
+        background: #333;
+        height: 6px;
+        border-radius: 3px;
+      }
+      
+      .video-progress-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #007bff;
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        margin-top: -5px;
+      }
+      
+      .video-progress-slider::-moz-range-track {
+        background: #333;
+        height: 6px;
+        border-radius: 3px;
+        border: none;
+      }
+      
+      .video-progress-slider::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #007bff;
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      }
+    `
+    document.head.appendChild(style)
+    
+    return () => {
+      document.head.removeChild(style)
+    }
+  }, [])
   const [numPages, setNumPages] = useState(null)
   const [pageNumber, setPageNumber] = useState(1)
   const [loading, setLoading] = useState(true)
@@ -142,6 +195,38 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [showHighlightConfirm, setShowHighlightConfirm] = useState(false)
   const [highlightConfirmPos, setHighlightConfirmPos] = useState({ x: 0, y: 0 })
   const [currentTargetBlock, setCurrentTargetBlock] = useState(null) // { type: 'text'|'image', area, text? }
+  const [selectedFileType, setSelectedFileType] = useState('image') // 默认选择图片
+  const [showFileTypeMenu, setShowFileTypeMenu] = useState(false) // 控制悬浮按钮的文件类型菜单显示
+  const [showOperationMenu, setShowOperationMenu] = useState(false) // 控制操作菜单的显示
+  const [currentAttachmentId, setCurrentAttachmentId] = useState(null) // 当前选中的附件ID
+  
+  // 文件类型配置
+  const fileTypes = [
+    { id: 'image', name: '图片', icon: '🖼️', accept: 'image/*' },
+    { id: 'video', name: '视频', icon: '🎥', accept: 'video/*' },
+    { id: 'audio', name: '音频', icon: '🎵', accept: 'audio/*' },
+    { id: '3d', name: '3D模型', icon: '🎲', accept: '.obj,.fbx,.gltf,.glb,.dae,.ply,.stl' }
+  ]
+  
+  // 操作类型配置 - 动态生成，根据附件状态
+  const getOperationTypes = (targetId) => {
+    const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === targetId)
+    if (!attachment) return []
+    
+    const operations = []
+    
+    // 显示/隐藏按钮 - 根据当前状态动态显示
+    if (attachment.hidden) {
+      operations.push({ id: 'show', name: '显示', icon: '👁️', action: 'show' })
+    } else {
+      operations.push({ id: 'hide', name: '隐藏', icon: '🙈', action: 'hide' })
+    }
+    
+    // 删除按钮
+    operations.push({ id: 'delete', name: '删除', icon: '🗑️', action: 'delete' })
+    
+    return operations
+  }
   const [pdfDoc, setPdfDoc] = useState(null)
   const [parsedByPage, setParsedByPage] = useState({}) // { [pageNumber]: Annotation[] }
   const [lpBlocksByPage, setLpBlocksByPage] = useState(null) // 后端(LP+PubLayNet)返回的原始结果
@@ -155,7 +240,7 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [manualOffset, setManualOffset] = useState({ x: -2, y: -1 }) // 手动调整偏移
   const [usePageScale, setUsePageScale] = useState(true) // 是否使用pageScale
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
-  const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean } }
+  const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
   const videoRefs = useRef({}) // 保持每个视频的ref
   const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
   const [hoveredAnnId, setHoveredAnnId] = useState(null) // 悬浮中的图/表块
@@ -401,6 +486,8 @@ const InteractivePDFViewer4 = ({ file }) => {
       if (isSuccess) {
         const isVideo = (uploadedFile.type && uploadedFile.type.startsWith('video/')) || /\.(mp4|webm|ogg|mov|m4v)$/i.test(uploadedFile.name || '')
         const isImage = (uploadedFile.type && uploadedFile.type.startsWith('image/')) || /\.(png|jpe?g|gif|bmp|webp|svg)$/i.test(uploadedFile.name || '')
+        const isAudio = (uploadedFile.type && uploadedFile.type.startsWith('audio/')) || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(uploadedFile.name || '')
+        const is3DModel = /\.(obj|fbx|gltf|glb|dae|ply|stl)$/i.test(uploadedFile.name || '')
         
         const newAttachment = {
           id: `attachment_${Date.now()}`,
@@ -414,10 +501,15 @@ const InteractivePDFViewer4 = ({ file }) => {
           targetText: currentTargetBlock?.text,
           targetId: currentTargetBlock?.targetId,
           targetName: currentTargetBlock?.targetName,
+          selectedFileType, // 记录用户选择的文件类型
           isVideo,
           isImage,
+          isAudio,
+          is3DModel,
           videoUrl: isVideo ? URL.createObjectURL(uploadedFile) : undefined,
-          imageUrl: isImage ? URL.createObjectURL(uploadedFile) : undefined
+          imageUrl: isImage ? URL.createObjectURL(uploadedFile) : undefined,
+          audioUrl: isAudio ? URL.createObjectURL(uploadedFile) : undefined,
+          modelUrl: is3DModel ? URL.createObjectURL(uploadedFile) : undefined
         }
         
         setAttachments(prev => [...prev, newAttachment])
@@ -475,6 +567,29 @@ const InteractivePDFViewer4 = ({ file }) => {
         } 
       }))
     }
+  }
+
+  // 处理视频进度条拖拽
+  const handleVideoProgressChange = (attId, newTime) => {
+    const video = videoRefs.current[attId]
+    if (!video) return
+    
+    video.currentTime = newTime
+    setVideoStates(prev => ({ 
+      ...prev, 
+      [attId]: { 
+        ...prev[attId], 
+        currentTime: newTime 
+      } 
+    }))
+  }
+
+  // 格式化时间显示
+  const formatTime = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '0:00'
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
 
@@ -558,17 +673,42 @@ const InteractivePDFViewer4 = ({ file }) => {
     setSelectedArea(null)
   }
 
+  // 处理操作菜单点击
+  const handleOperationClick = (operationType, targetId) => {
+    // 找到对应的附件
+    const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === targetId)
+    if (!attachment) return
+    
+    switch (operationType) {
+      case 'hide':
+        toggleAttachmentVisibility(attachment.id)
+        break
+      case 'show':
+        toggleAttachmentVisibility(attachment.id)
+        break
+      case 'delete':
+        deleteAttachment(attachment.id)
+        break
+      default:
+        break
+    }
+    setShowOperationMenu(false)
+    setCurrentAttachmentId(null)
+  }
+
   // 点击页面其他地方关闭菜单
   useEffect(() => {
     const handleClickOutside = () => {
       closeContextMenu()
+      setShowFileTypeMenu(false)
+      setShowOperationMenu(false)
     }
     
-    if (showContextMenu) {
+    if (showContextMenu || showFileTypeMenu || showOperationMenu) {
       document.addEventListener('click', handleClickOutside)
       return () => document.removeEventListener('click', handleClickOutside)
     }
-  }, [showContextMenu])
+  }, [showContextMenu, showFileTypeMenu, showOperationMenu])
 
   useEffect(() => {
     console.log('交互式编辑器useEffect触发，文件:', file?.name)
@@ -2849,11 +2989,6 @@ const InteractivePDFViewer4 = ({ file }) => {
                     }}
                     title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
                   >
-                    {/* 控制按钮 */}
-                    <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
-                      <button style={styles.overlayBtn} title={att.hidden ? '显示' : '隐藏'} onClick={()=>toggleAttachmentVisibility(att.id)}>{att.hidden ? '👁️' : '🙈'}</button>
-                      <button style={styles.overlayBtn} title={'删除'} onClick={()=>deleteAttachment(att.id)}>🗑</button>
-                    </div>
                     
                     {/* 只有开始播放后才渲染视频元素 */}
                     {hasStartedPlaying && (
@@ -2871,6 +3006,31 @@ const InteractivePDFViewer4 = ({ file }) => {
                         onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: true } }))}
                         onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
                         onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
+                        onTimeUpdate={() => {
+                          const video = videoRefs.current[att.id]
+                          if (video) {
+                            setVideoStates(prev => ({ 
+                              ...prev, 
+                              [att.id]: { 
+                                ...prev[att.id], 
+                                currentTime: video.currentTime,
+                                duration: video.duration || prev[att.id]?.duration || 0
+                              } 
+                            }))
+                          }
+                        }}
+                        onLoadedMetadata={() => {
+                          const video = videoRefs.current[att.id]
+                          if (video) {
+                            setVideoStates(prev => ({ 
+                              ...prev, 
+                              [att.id]: { 
+                                ...prev[att.id], 
+                                duration: video.duration || 0
+                              } 
+                            }))
+                          }
+                        }}
                       />
                     )}
                     
@@ -2909,6 +3069,60 @@ const InteractivePDFViewer4 = ({ file }) => {
                 )
               })}
 
+            {/* 视频控制按钮和进度条 - 独立渲染在视频容器外部 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+              .map(att => {
+                const area = att.area
+                const hasStartedPlaying = videoStates[att.id]?.hasStarted
+                return (
+                  <React.Fragment key={`video_controls_${att.id}`}>
+                    
+                    {/* 进度条 - 显示在视频bbox下方外部 */}
+                    {hasStartedPlaying && videoStates[att.id]?.duration > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: area.x,
+                          top: area.y + area.height + 8, // 显示在视频bbox下方外部
+                          width: area.width,
+                          background: 'rgba(0,0,0,0.9)',
+                          borderRadius: 4,
+                          padding: '8px',
+                          zIndex: 1000,
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                        }}
+                      >
+                        {/* 进度条 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+                            {formatTime(videoStates[att.id]?.currentTime || 0)}
+                          </span>
+                          <input
+                            type="range"
+                            min="0"
+                            max={videoStates[att.id]?.duration || 0}
+                            value={videoStates[att.id]?.currentTime || 0}
+                            onChange={(e) => handleVideoProgressChange(att.id, parseFloat(e.target.value))}
+                            style={{
+                              flex: 1,
+                              height: '6px',
+                              outline: 'none',
+                              cursor: 'pointer'
+                            }}
+                            className="video-progress-slider"
+                          />
+                          <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+                            {formatTime(videoStates[att.id]?.duration || 0)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
+                )
+              })}
+
             {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
@@ -2933,10 +3147,6 @@ const InteractivePDFViewer4 = ({ file }) => {
                     onClick={(e) => { e.stopPropagation(); toggleImageFit(att.id) }}
                     onDoubleClick={(e) => { e.stopPropagation(); const w = window.open(att.imageUrl, '_blank'); if (w) w.document.title = att.fileName }}
                   >
-                    <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
-                      <button style={styles.overlayBtn} title={att.hidden ? '显示' : '隐藏'} onClick={()=>toggleAttachmentVisibility(att.id)}>{att.hidden ? '👁️' : '🙈'}</button>
-                      <button style={styles.overlayBtn} title={'删除'} onClick={()=>deleteAttachment(att.id)}>🗑</button>
-                    </div>
                     <img
                       src={att.imageUrl}
                       alt={att.fileName}
@@ -2948,7 +3158,8 @@ const InteractivePDFViewer4 = ({ file }) => {
                 )
               })}
 
-            {/* 隐藏附件的“显示”按钮（占位）*/}
+
+            {/* 隐藏附件的"显示"按钮（占位）*/}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.hidden && att.area)
               .map(att => (
@@ -2956,8 +3167,8 @@ const InteractivePDFViewer4 = ({ file }) => {
                   key={`hidden_${att.id}`}
                   style={{
                     position: 'absolute',
-                    left: att.area.x + 4,
-                    top: att.area.y + 4,
+                    left: att.area.x + att.area.width + 8, // 显示在bbox右侧外部
+                    top: att.area.y + 6,
                     zIndex: 13,
                     ...styles.hiddenToggle
                   }}
@@ -2978,9 +3189,9 @@ const InteractivePDFViewer4 = ({ file }) => {
                   style={{
                     position: 'absolute',
                     left: ann.position.x,
-                    top: ann.position.y,
+                    top: ann.position.y - 30, // 向上扩展30px来覆盖上传按钮
                     width: ann.position.width,
-                    height: ann.position.height,
+                    height: ann.position.height + 30, // 增加高度来包含上传按钮区域
                     background: 'transparent',
                     zIndex: 998 // 略低于视频层，但仍然很高
                   }}
@@ -2990,15 +3201,137 @@ const InteractivePDFViewer4 = ({ file }) => {
                   title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
                 >
                   {hoveredAnnId === ann.id && (
-                    <div
-                      style={{ 
-                        ...styles.hoverBadge,
-                        right: 8,
-                        top: 8
-                      }}
-                      onClick={(e) => { e.stopPropagation(); uploadForAnnotation(ann) }}
-                    >
-                      📎 上传文件
+                    <div style={{ position: 'relative' }}>
+                      {/* 上传按钮显示在bbox外部上方 */}
+                      <div
+                        style={{ 
+                          ...styles.hoverBadge,
+                          left: 8, // 显示在bbox左侧
+                          top: 0, // 显示在bbox上方外部，紧贴方框
+                          right: 'auto' // 重置right定位
+                        }}
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          setShowFileTypeMenu(!showFileTypeMenu)
+                        }}
+                      >
+                        📎 上传文件
+                      </div>
+                      
+                      {/* 操作按钮显示在bbox外部上方，上传按钮旁边 - 只在有附件时显示 */}
+                      {attachments.some(att => att.pageNumber === pageNumber && att.targetId === ann.id) && (
+                        <div
+                          style={{ 
+                            ...styles.hoverBadge,
+                            left: 8 + 80 + 8, // 上传按钮宽度 + 间距
+                            top: 0, // 与上传按钮同一行
+                            right: 'auto' // 重置right定位
+                          }}
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            setCurrentAttachmentId(ann.id)
+                            setShowOperationMenu(!showOperationMenu)
+                          }}
+                        >
+                          ⚙️ 操作
+                        </div>
+                      )}
+                      
+                      {/* 文件类型选择菜单 */}
+                      {showFileTypeMenu && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: -8, // 显示在bbox右侧外部
+                            top: 32,
+                            background: 'white',
+                            border: '1px solid #ddd',
+                            borderRadius: 6,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            zIndex: 1000,
+                            minWidth: 120
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {fileTypes.map(fileType => (
+                            <div
+                              key={fileType.id}
+                              style={{
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                fontSize: 13,
+                                backgroundColor: selectedFileType === fileType.id ? '#e3f2fd' : 'transparent',
+                                fontWeight: selectedFileType === fileType.id ? 'bold' : 'normal',
+                                borderBottom: fileType.id !== fileTypes[fileTypes.length - 1].id ? '1px solid #f0f0f0' : 'none'
+                              }}
+                              onClick={() => {
+                                uploadForAnnotation(ann)
+                                setShowFileTypeMenu(false)
+                              }}
+                              onMouseEnter={(e) => {
+                                if (selectedFileType !== fileType.id) {
+                                  setSelectedFileType(fileType.id)
+                                  e.target.style.backgroundColor = '#f8f9fa'
+                                }
+                              }}
+                              onMouseLeave={(e) => {
+                                if (selectedFileType !== fileType.id) {
+                                  e.target.style.backgroundColor = 'transparent'
+                                }
+                              }}
+                            >
+                              {fileType.icon} {fileType.name}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* 操作类型选择菜单 */}
+                      {showOperationMenu && currentAttachmentId === ann.id && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: 8 + 80 + 8, // 上传按钮宽度 + 间距
+                            top: 32,
+                            background: 'white',
+                            border: '1px solid #ddd',
+                            borderRadius: 6,
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            zIndex: 1001,
+                            minWidth: 120
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
+                            <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
+                              ⚙️ 操作类型
+                            </div>
+                            {getOperationTypes(ann.id).map(operation => (
+                              <button 
+                                key={operation.id}
+                                style={{
+                                  ...styles.menuItem,
+                                  backgroundColor: 'transparent',
+                                  color: '#333',
+                                  fontSize: 13,
+                                  padding: '8px 12px',
+                                  border: 'none',
+                                  width: '100%',
+                                  textAlign: 'left',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px'
+                                }}
+                                onClick={() => handleOperationClick(operation.action, ann.id)}
+                              >
+                                <span>{operation.icon}</span>
+                                <span>{operation.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -3123,18 +3456,40 @@ const InteractivePDFViewer4 = ({ file }) => {
             top: contextMenuPos.y
           }}
         >
-          <button 
-            style={styles.menuItem}
-            onClick={triggerFileUpload}
-            onMouseEnter={(e) => e.target.style.backgroundColor = '#f8f9fa'}
-            onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
-          >
-            📎 上传文件
-          </button>
+          {/* 文件类型选择菜单 */}
+          <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
+            <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
+              📎 上传文件类型
+            </div>
+            {fileTypes.map(fileType => (
+              <button 
+                key={fileType.id}
+                style={{
+                  ...styles.menuItem,
+                  backgroundColor: selectedFileType === fileType.id ? '#e3f2fd' : 'transparent',
+                  fontWeight: selectedFileType === fileType.id ? 'bold' : 'normal'
+                }}
+                onClick={() => {
+                  triggerFileUpload()
+                }}
+                onMouseEnter={(e) => {
+                  if (selectedFileType !== fileType.id) {
+                    setSelectedFileType(fileType.id)
+                    e.target.style.backgroundColor = '#f8f9fa'
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (selectedFileType !== fileType.id) {
+                    e.target.style.backgroundColor = 'transparent'
+                  }
+                }}
+              >
+                {fileType.icon} {fileType.name}
+              </button>
+            ))}
+          </div>
           
-
-          
-          {/* 调试显示匹配到的块 + 关联到“图片几/表格几” */}
+          {/* 调试显示匹配到的块 + 关联到"图片几/表格几" */}
           {(() => {
             const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
             let matched = null
@@ -3185,7 +3540,7 @@ const InteractivePDFViewer4 = ({ file }) => {
         type="file"
         style={{ display: 'none' }}
         onChange={handleFileUpload}
-        accept="*/*"
+        accept={fileTypes.find(ft => ft.id === selectedFileType)?.accept || '*/*'}
       />
 
       {/* 上传状态提示 */}
