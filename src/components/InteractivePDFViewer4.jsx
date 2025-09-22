@@ -3,6 +3,209 @@ import { Document, Page, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
 // CSS样式已在App.css中定义
 
+// 上传文件组件
+const UploadFileButton = ({ 
+  position, 
+  showFileTypeMenu, 
+  setShowFileTypeMenu, 
+  fileTypes, 
+  selectedFileType, 
+  setSelectedFileType,
+  uploadForAnnotation,
+  ann,
+  onMenuToggle // 新增：菜单切换回调
+}) => {
+  return (
+    <div
+      style={{ 
+        ...styles.hoverBadge,
+        left: position.left,
+        top: position.top,
+        right: 'auto'
+      }}
+      onClick={(e) => { 
+        e.stopPropagation(); 
+        const newShowState = !showFileTypeMenu
+        setShowFileTypeMenu(newShowState)
+        // 通知父组件菜单状态变化，传递菜单位置信息
+        onMenuToggle && onMenuToggle({
+          show: newShowState,
+          position: {
+            left: position.menuLeft,
+            top: position.menuTop
+          },
+          type: 'upload',
+          ann: ann,
+          fileTypes: fileTypes,
+          selectedFileType: selectedFileType,
+          setSelectedFileType: setSelectedFileType,
+          uploadForAnnotation: uploadForAnnotation
+        })
+      }}
+    >
+      📎 上传文件
+    </div>
+  )
+}
+
+// 操作按钮组件
+const OperationButton = ({ 
+  position, 
+  showOperationMenu, 
+  setShowOperationMenu, 
+  currentAttachmentId, 
+  setCurrentAttachmentId,
+  getOperationTypes,
+  handleOperationClick,
+  ann,
+  attachments,
+  pageNumber,
+  onMenuToggle // 新增：菜单切换回调
+}) => {
+  // 只在有附件时显示
+  const hasAttachment = attachments.some(att => att.pageNumber === pageNumber && att.targetId === ann.id)
+  
+  if (!hasAttachment) return null
+  
+  return (
+    <div
+      style={{ 
+        ...styles.hoverBadge,
+        left: position.left,
+        top: position.top,
+        right: 'auto'
+      }}
+      onClick={(e) => { 
+        e.stopPropagation(); 
+        setCurrentAttachmentId(ann.id)
+        const newShowState = !showOperationMenu
+        setShowOperationMenu(newShowState)
+        // 通知父组件菜单状态变化，传递菜单位置信息
+        onMenuToggle && onMenuToggle({
+          show: newShowState,
+          position: {
+            left: position.menuLeft,
+            top: position.menuTop
+          },
+          type: 'operation',
+          ann: ann,
+          currentAttachmentId: ann.id,
+          getOperationTypes: getOperationTypes,
+          handleOperationClick: handleOperationClick
+        })
+      }}
+    >
+      ⚙️ 操作
+    </div>
+  )
+}
+
+// 视频进度条组件
+const VideoProgressBar = ({ 
+  attachment, 
+  videoStates, 
+  handleVideoProgressChange, 
+  formatTime 
+}) => {
+  const hasStartedPlaying = videoStates[attachment.id]?.hasStarted
+  const duration = videoStates[attachment.id]?.duration
+  
+  if (!hasStartedPlaying || !duration || duration <= 0) return null
+  
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: attachment.area.x,
+        top: attachment.area.y + attachment.area.height + 8,
+        width: attachment.area.width,
+        background: 'rgba(0,0,0,0.9)',
+        borderRadius: 4,
+        padding: '8px',
+        zIndex: 1000,
+        border: '1px solid rgba(255,255,255,0.2)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+          {formatTime(videoStates[attachment.id]?.currentTime || 0)}
+        </span>
+        <input
+          type="range"
+          min="0"
+          max={duration}
+          value={videoStates[attachment.id]?.currentTime || 0}
+          onChange={(e) => handleVideoProgressChange(attachment.id, parseFloat(e.target.value))}
+          style={{
+            flex: 1,
+            height: '6px',
+            outline: 'none',
+            cursor: 'pointer'
+          }}
+          className="video-progress-slider"
+        />
+        <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+          {formatTime(duration)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// 音频进度条组件
+const AudioProgressBar = ({ 
+  attachment, 
+  audioStates, 
+  handleAudioProgressChange, 
+  formatTime 
+}) => {
+  const hasStartedPlaying = audioStates[attachment.id]?.hasStarted
+  const duration = audioStates[attachment.id]?.duration
+  
+  if (!hasStartedPlaying || !duration || duration <= 0) return null
+  
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: attachment.area.x,
+        top: attachment.area.y + attachment.area.height + 8,
+        width: attachment.area.width,
+        background: 'rgba(0,0,0,0.9)',
+        borderRadius: 4,
+        padding: '8px',
+        zIndex: 1000,
+        border: '1px solid rgba(255,255,255,0.2)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+          {formatTime(audioStates[attachment.id]?.currentTime || 0)}
+        </span>
+        <input
+          type="range"
+          min="0"
+          max={duration}
+          value={audioStates[attachment.id]?.currentTime || 0}
+          onChange={(e) => handleAudioProgressChange(attachment.id, parseFloat(e.target.value))}
+          style={{
+            flex: 1,
+            height: '6px',
+            outline: 'none',
+            cursor: 'pointer'
+          }}
+          className="video-progress-slider"
+        />
+        <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
+          {formatTime(duration)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // 使用本地worker文件，避免CORS问题 - 统一使用5.3.93版本
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf-worker/pdf.worker.min.js'
@@ -199,6 +402,7 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [showFileTypeMenu, setShowFileTypeMenu] = useState(false) // 控制悬浮按钮的文件类型菜单显示
   const [showOperationMenu, setShowOperationMenu] = useState(false) // 控制操作菜单的显示
   const [currentAttachmentId, setCurrentAttachmentId] = useState(null) // 当前选中的附件ID
+  const [currentMenu, setCurrentMenu] = useState(null) // 当前显示的菜单信息
   
   // 文件类型配置
   const fileTypes = [
@@ -242,6 +446,8 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
   const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
   const videoRefs = useRef({}) // 保持每个视频的ref
+  const [audioStates, setAudioStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
+  const audioRefs = useRef({}) // 保持每个音频的ref
   const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
   const [hoveredAnnId, setHoveredAnnId] = useState(null) // 悬浮中的图/表块
   const [bboxTuning, setBBoxTuning] = useState({
@@ -489,6 +695,15 @@ const InteractivePDFViewer4 = ({ file }) => {
         const isAudio = (uploadedFile.type && uploadedFile.type.startsWith('audio/')) || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(uploadedFile.name || '')
         const is3DModel = /\.(obj|fbx|gltf|glb|dae|ply|stl)$/i.test(uploadedFile.name || '')
         
+        console.log('文件类型检测结果:', {
+          fileName: uploadedFile.name,
+          fileType: uploadedFile.type,
+          isVideo,
+          isImage,
+          isAudio,
+          is3DModel
+        })
+        
         const newAttachment = {
           id: `attachment_${Date.now()}`,
           pageNumber,
@@ -512,7 +727,12 @@ const InteractivePDFViewer4 = ({ file }) => {
           modelUrl: is3DModel ? URL.createObjectURL(uploadedFile) : undefined
         }
         
-        setAttachments(prev => [...prev, newAttachment])
+        setAttachments(prev => {
+          const updated = [...prev, newAttachment]
+          console.log('新附件已添加:', newAttachment)
+          console.log('所有附件列表:', updated)
+          return updated
+        })
         setUploadStatus({ 
           type: 'success', 
           message: `文件 "${uploadedFile.name}" 上传成功！` 
@@ -564,6 +784,71 @@ const InteractivePDFViewer4 = ({ file }) => {
         [attId]: { 
           ...prev[attId], 
           playing: false 
+        } 
+      }))
+    }
+  }
+
+  // 切换音频播放状态
+  const toggleAudioPlay = (attId) => {
+    const el = audioRefs.current[attId]
+    console.log('toggleAudioPlay 调用:', { attId, el, paused: el?.paused })
+    if (!el) {
+      console.error('音频元素不存在:', attId)
+      return
+    }
+    if (el.paused) {
+      // 暂停其它音频
+      Object.entries(audioRefs.current).forEach(([id, a]) => {
+        if (id !== attId && a && !a.paused) {
+          console.log('暂停其他音频:', id)
+          a.pause()
+        }
+      })
+      console.log('播放音频:', attId)
+      el.play().then(() => {
+        console.log('音频播放成功:', attId)
+        setAudioStates(prev => ({ 
+          ...prev, 
+          [attId]: { 
+            ...prev[attId], 
+            playing: true, 
+            hasStarted: true 
+          } 
+        }))
+      }).catch(e => {
+        console.error('音频播放失败:', attId, e)
+        setAudioStates(prev => ({ 
+          ...prev, 
+          [attId]: { 
+            ...prev[attId], 
+            playing: false 
+          } 
+        }))
+      })
+    } else {
+      console.log('暂停音频:', attId)
+      el.pause()
+      setAudioStates(prev => ({ 
+        ...prev, 
+        [attId]: { 
+          ...prev[attId], 
+          playing: false 
+        } 
+      }))
+    }
+  }
+
+  // 处理音频进度条拖拽
+  const handleAudioProgressChange = (attId, newTime) => {
+    const el = audioRefs.current[attId]
+    if (el) {
+      el.currentTime = newTime
+      setAudioStates(prev => ({ 
+        ...prev, 
+        [attId]: { 
+          ...prev[attId], 
+          currentTime: newTime 
         } 
       }))
     }
@@ -2916,23 +3201,6 @@ const InteractivePDFViewer4 = ({ file }) => {
               ))
             }
 
-            {/* 渲染附件标记（放到与页面同层） */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && !att.isVideo && !att.isImage && !att.hidden)
-              .map(att => (
-                <div key={att.id} style={{ position: 'absolute', left: (att.area?.x ?? 20), top: (att.area?.y ?? 20), zIndex: 12 }}>
-                  <div
-                    style={styles.attachment}
-                    title={`附件: ${att.fileName}${att.targetName ? `（关联到：${att.targetName}）` : ''}`}
-                  >
-                    📎
-                  </div>
-                  <div style={styles.overlayControls} onClick={(e)=>e.stopPropagation()}>
-                    <button style={styles.overlayBtn} title={"隐藏"} onClick={()=>toggleAttachmentVisibility(att.id)}>🙈</button>
-                    <button style={styles.overlayBtn} title={"删除"} onClick={()=>deleteAttachment(att.id)}>🗑</button>
-                  </div>
-                </div>
-              ))}
 
             {/* 视频覆盖块：在原始PDF上覆盖控制图标，点击时才渲染视频 */}
             {attachments
@@ -2950,7 +3218,7 @@ const InteractivePDFViewer4 = ({ file }) => {
                       top: area.y,
                       width: area.width,
                       height: area.height,
-                      zIndex: 999, // 大幅提高z-index，确保在最上层
+                      zIndex: 10010, // 高于hover_region，确保可以接收点击事件
                       overflow: 'hidden',
                       borderRadius: hasStartedPlaying ? 4 : 0,
                       boxShadow: 'none', // 移除阴影效果
@@ -3040,7 +3308,7 @@ const InteractivePDFViewer4 = ({ file }) => {
                         style={{
                           ...styles.videoPlayOverlay,
                           pointerEvents: 'none', // 让点击事件穿透到父容器
-                          zIndex: 1000 // 确保播放按钮在最上层
+                          zIndex: 50000 // 确保播放按钮在最上层
                         }}
                       >
                         ▶
@@ -3060,7 +3328,7 @@ const InteractivePDFViewer4 = ({ file }) => {
                         fontSize: '11px',
                         pointerEvents: 'none', // 确保不阻止点击事件
                         userSelect: 'none', // 防止文字被选中
-                        zIndex: 1001 // 确保文件标识在最上层
+                        zIndex: 50001 // 确保文件标识在最上层
                       }}>
                         📹 {att.fileName}
                       </div>
@@ -3069,59 +3337,210 @@ const InteractivePDFViewer4 = ({ file }) => {
                 )
               })}
 
-            {/* 视频控制按钮和进度条 - 独立渲染在视频容器外部 */}
+            {/* 视频进度条 - 独立渲染在视频容器外部 */}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+              .map(att => (
+                <VideoProgressBar
+                  key={`video_progress_${att.id}`}
+                  attachment={att}
+                  videoStates={videoStates}
+                  handleVideoProgressChange={handleVideoProgressChange}
+                  formatTime={formatTime}
+                />
+              ))}
+
+            {/* 音频覆盖块：完全复制视频的处理逻辑 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
               .map(att => {
                 const area = att.area
-                const hasStartedPlaying = videoStates[att.id]?.hasStarted
+                const isPlaying = audioStates[att.id]?.playing
+                const hasStartedPlaying = audioStates[att.id]?.hasStarted
                 return (
-                  <React.Fragment key={`video_controls_${att.id}`}>
+                  <div
+                    key={`audio_${att.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: area.x,
+                      top: area.y,
+                      width: area.width,
+                      height: area.height,
+                      zIndex: 10010, // 高于hover_region，确保可以接收点击事件
+                      overflow: 'hidden',
+                      borderRadius: hasStartedPlaying ? 4 : 0,
+                      boxShadow: 'none', // 移除阴影效果
+                      // 初始状态：透明背景，让原始PDF内容显示
+                      background: hasStartedPlaying ? 'rgba(0, 123, 255, 0.1)' : 'transparent',
+                      cursor: 'pointer' // 添加指针样式
+                    }}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      console.log('音频点击事件触发', { hasStartedPlaying, attId: att.id })
+                      
+                      if (!hasStartedPlaying) {
+                        // 首次点击，开始播放音频
+                        console.log('开始播放音频')
+                        setAudioStates(prev => ({ 
+                          ...prev, 
+                          [att.id]: { playing: true, hasStarted: true } 
+                        }))
+                        // 延迟一点让audio元素先渲染
+                        setTimeout(() => {
+                          const audioEl = audioRefs.current[att.id]
+                          console.log('尝试播放音频元素', audioEl)
+                          if (audioEl) {
+                            audioEl.play().then(() => {
+                              console.log('音频播放成功')
+                            }).catch(e => {
+                              console.error('音频播放失败:', e)
+                            })
+                          }
+                        }, 100)
+                      } else {
+                        // 后续点击，切换播放/暂停
+                        console.log('切换播放状态')
+                        toggleAudioPlay(att.id)
+                      }
+                    }}
+                    title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
+                  >
                     
-                    {/* 进度条 - 显示在视频bbox下方外部 */}
-                    {hasStartedPlaying && videoStates[att.id]?.duration > 0 && (
+                    {/* 音频播放时的灰色半透明遮罩 */}
+                    {hasStartedPlaying && (
                       <div
                         style={{
-                          position: 'absolute',
-                          left: area.x,
-                          top: area.y + area.height + 8, // 显示在视频bbox下方外部
-                          width: area.width,
-                          background: 'rgba(0,0,0,0.9)',
-                          borderRadius: 4,
-                          padding: '8px',
-                          zIndex: 1000,
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                          width: '100%',
+                          height: '100%',
+                          background: 'rgba(128, 128, 128, 0.3)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          position: 'relative'
                         }}
                       >
-                        {/* 进度条 */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
-                            {formatTime(videoStates[att.id]?.currentTime || 0)}
-                          </span>
-                          <input
-                            type="range"
-                            min="0"
-                            max={videoStates[att.id]?.duration || 0}
-                            value={videoStates[att.id]?.currentTime || 0}
-                            onChange={(e) => handleVideoProgressChange(att.id, parseFloat(e.target.value))}
-                            style={{
-                              flex: 1,
-                              height: '6px',
-                              outline: 'none',
-                              cursor: 'pointer'
-                            }}
-                            className="video-progress-slider"
-                          />
-                          <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
-                            {formatTime(videoStates[att.id]?.duration || 0)}
-                          </span>
-                        </div>
+                        {/* 隐藏的音频元素 */}
+                        <audio
+                          ref={el => { 
+                            if (el) {
+                              audioRefs.current[att.id] = el
+                              console.log(`音频元素已创建: ${att.id}`, el)
+                              // 初始化音频状态
+                              if (!audioStates[att.id]) {
+                                setAudioStates(prev => ({
+                                  ...prev,
+                                  [att.id]: {
+                                    playing: false,
+                                    hasStarted: false,
+                                    currentTime: 0,
+                                    duration: 0
+                                  }
+                                }))
+                              }
+                            }
+                          }}
+                          src={att.audioUrl}
+                          style={{ display: 'none' }}
+                          preload="metadata"
+                          onTimeUpdate={() => {
+                            const audioEl = audioRefs.current[att.id]
+                            if (audioEl) {
+                              setAudioStates(prev => ({ 
+                                ...prev, 
+                                [att.id]: { 
+                                  ...prev[att.id], 
+                                  currentTime: audioEl.currentTime 
+                                } 
+                              }))
+                            }
+                          }}
+                          onLoadedMetadata={() => {
+                            const audioEl = audioRefs.current[att.id]
+                            if (audioEl) {
+                              console.log(`音频元数据已加载: ${att.id}`, { duration: audioEl.duration })
+                              setAudioStates(prev => ({ 
+                                ...prev, 
+                                [att.id]: { 
+                                  ...prev[att.id], 
+                                  duration: audioEl.duration 
+                                } 
+                              }))
+                            }
+                          }}
+                          onPlay={() => {
+                            console.log(`音频开始播放: ${att.id}`)
+                            setAudioStates(prev => ({ 
+                              ...prev, 
+                              [att.id]: { 
+                                ...prev[att.id], 
+                                playing: true 
+                              } 
+                            }))
+                          }}
+                          onPause={() => {
+                            console.log(`音频暂停: ${att.id}`)
+                            setAudioStates(prev => ({ 
+                              ...prev, 
+                              [att.id]: { 
+                                ...prev[att.id], 
+                                playing: false 
+                              } 
+                            }))
+                          }}
+                          onError={(e) => {
+                            console.error(`音频加载错误: ${att.id}`, e)
+                          }}
+                        />
                       </div>
                     )}
-                  </React.Fragment>
+                    
+                    {/* 播放按钮覆盖层 */}
+                    {(!hasStartedPlaying || !isPlaying) && (
+                      <div 
+                        style={{
+                          ...styles.videoPlayOverlay,
+                          pointerEvents: 'none', // 让点击事件穿透到父容器
+                          zIndex: 50000 // 确保播放按钮在最上层
+                        }}
+                      >
+                        ▶
+                      </div>
+                    )}
+                    
+                    {/* 音频信息标识 */}
+                    {!hasStartedPlaying && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: 8,
+                        left: 8,
+                        background: 'rgba(0,0,0,0.7)',
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        fontSize: '11px',
+                        pointerEvents: 'none', // 确保不阻止点击事件
+                        userSelect: 'none', // 防止文字被选中
+                        zIndex: 50001 // 确保文件标识在最上层
+                      }}>
+                        🎵 {att.fileName}
+                      </div>
+                    )}
+                  </div>
                 )
               })}
+
+            {/* 音频进度条 - 独立渲染在音频容器外部 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
+              .map(att => (
+                <AudioProgressBar
+                  key={`audio_progress_${att.id}`}
+                  attachment={att}
+                  audioStates={audioStates}
+                  handleAudioProgressChange={handleAudioProgressChange}
+                  formatTime={formatTime}
+                />
+              ))}
 
             {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
             {attachments
@@ -3158,184 +3577,77 @@ const InteractivePDFViewer4 = ({ file }) => {
                 )
               })}
 
-
-            {/* 隐藏附件的"显示"按钮（占位）*/}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.hidden && att.area)
-              .map(att => (
-                <button
-                  key={`hidden_${att.id}`}
-                  style={{
-                    position: 'absolute',
-                    left: att.area.x + att.area.width + 8, // 显示在bbox右侧外部
-                    top: att.area.y + 6,
-                    zIndex: 13,
-                    ...styles.hiddenToggle
-                  }}
-                  title={`显示 ${att.fileName}`}
-                  onClick={(e)=>{ e.stopPropagation(); toggleAttachmentVisibility(att.id) }}
-                >
-                  👁️
-                </button>
-              ))}
-
             {/* 悬浮于图/表区域时，显示"上传"快捷按钮（整个框内悬浮） */}
             {(() => {
               const anns = (parsedByPage[pageNumber] || []).filter(a => a.type === 'image' || a.type === 'table' || (!a.id?.startsWith?.('text') && a.type !== 'text'))
               if (!anns.length) return null
-              return anns.map(ann => (
-                <div
-                  key={`hover_region_${ann.id}`}
-                  style={{
-                    position: 'absolute',
-                    left: ann.position.x,
-                    top: ann.position.y - 30, // 向上扩展30px来覆盖上传按钮
-                    width: ann.position.width,
-                    height: ann.position.height + 30, // 增加高度来包含上传按钮区域
-                    background: 'transparent',
-                    zIndex: 998 // 略低于视频层，但仍然很高
-                  }}
-                  onMouseEnter={() => setHoveredAnnId(ann.id)}
-                  onMouseLeave={() => setHoveredAnnId(prev => (prev === ann.id ? null : prev))}
-                  onClick={(e) => { e.stopPropagation() }}
-                  title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
-                >
+              return anns.map(ann => {
+                return (
+                  <div
+                    key={`hover_region_${ann.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: ann.position.x,
+                      top: ann.position.y - 30, // 向上扩展30px来覆盖上传按钮
+                      width: ann.position.width,
+                      height: ann.position.height + 30, // 增加高度来包含上传按钮区域
+                      background: 'transparent',
+                      zIndex: 10005, // 确保在视频容器之上
+                      pointerEvents: 'auto' // 恢复正常的鼠标事件处理
+                    }}
+                    onMouseEnter={() => setHoveredAnnId(ann.id)}
+                    onMouseLeave={() => setHoveredAnnId(prev => (prev === ann.id ? null : prev))}
+                    onClick={(e) => { e.stopPropagation() }}
+                    title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
+                  >
                   {hoveredAnnId === ann.id && (
                     <div style={{ position: 'relative' }}>
-                      {/* 上传按钮显示在bbox外部上方 */}
-                      <div
-                        style={{ 
-                          ...styles.hoverBadge,
-                          left: 8, // 显示在bbox左侧
-                          top: 0, // 显示在bbox上方外部，紧贴方框
-                          right: 'auto' // 重置right定位
+                      {/* 上传文件组件 */}
+                      <UploadFileButton
+                        position={{
+                          left: 8,
+                          top: 0,
+                          menuLeft: ann.position.x - 8,
+                          menuTop: ann.position.y - 30 + 32
                         }}
-                        onClick={(e) => { 
-                          e.stopPropagation(); 
-                          setShowFileTypeMenu(!showFileTypeMenu)
+                        showFileTypeMenu={showFileTypeMenu}
+                        setShowFileTypeMenu={setShowFileTypeMenu}
+                        fileTypes={fileTypes}
+                        selectedFileType={selectedFileType}
+                        setSelectedFileType={setSelectedFileType}
+                        uploadForAnnotation={uploadForAnnotation}
+                        ann={ann}
+                        onMenuToggle={(menuInfo) => {
+                          setCurrentMenu(menuInfo)
                         }}
-                      >
-                        📎 上传文件
-                      </div>
+                      />
                       
-                      {/* 操作按钮显示在bbox外部上方，上传按钮旁边 - 只在有附件时显示 */}
-                      {attachments.some(att => att.pageNumber === pageNumber && att.targetId === ann.id) && (
-                        <div
-                          style={{ 
-                            ...styles.hoverBadge,
-                            left: 8 + 80 + 8, // 上传按钮宽度 + 间距
-                            top: 0, // 与上传按钮同一行
-                            right: 'auto' // 重置right定位
-                          }}
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            setCurrentAttachmentId(ann.id)
-                            setShowOperationMenu(!showOperationMenu)
-                          }}
-                        >
-                          ⚙️ 操作
-                        </div>
-                      )}
-                      
-                      {/* 文件类型选择菜单 */}
-                      {showFileTypeMenu && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: -8, // 显示在bbox右侧外部
-                            top: 32,
-                            background: 'white',
-                            border: '1px solid #ddd',
-                            borderRadius: 6,
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                            zIndex: 1000,
-                            minWidth: 120
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {fileTypes.map(fileType => (
-                            <div
-                              key={fileType.id}
-                              style={{
-                                padding: '8px 12px',
-                                cursor: 'pointer',
-                                fontSize: 13,
-                                backgroundColor: selectedFileType === fileType.id ? '#e3f2fd' : 'transparent',
-                                fontWeight: selectedFileType === fileType.id ? 'bold' : 'normal',
-                                borderBottom: fileType.id !== fileTypes[fileTypes.length - 1].id ? '1px solid #f0f0f0' : 'none'
-                              }}
-                              onClick={() => {
-                                uploadForAnnotation(ann)
-                                setShowFileTypeMenu(false)
-                              }}
-                              onMouseEnter={(e) => {
-                                if (selectedFileType !== fileType.id) {
-                                  setSelectedFileType(fileType.id)
-                                  e.target.style.backgroundColor = '#f8f9fa'
-                                }
-                              }}
-                              onMouseLeave={(e) => {
-                                if (selectedFileType !== fileType.id) {
-                                  e.target.style.backgroundColor = 'transparent'
-                                }
-                              }}
-                            >
-                              {fileType.icon} {fileType.name}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      
-                      {/* 操作类型选择菜单 */}
-                      {showOperationMenu && currentAttachmentId === ann.id && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: 8 + 80 + 8, // 上传按钮宽度 + 间距
-                            top: 32,
-                            background: 'white',
-                            border: '1px solid #ddd',
-                            borderRadius: 6,
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                            zIndex: 1001,
-                            minWidth: 120
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
-                            <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
-                              ⚙️ 操作类型
-                            </div>
-                            {getOperationTypes(ann.id).map(operation => (
-                              <button 
-                                key={operation.id}
-                                style={{
-                                  ...styles.menuItem,
-                                  backgroundColor: 'transparent',
-                                  color: '#333',
-                                  fontSize: 13,
-                                  padding: '8px 12px',
-                                  border: 'none',
-                                  width: '100%',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '8px'
-                                }}
-                                onClick={() => handleOperationClick(operation.action, ann.id)}
-                              >
-                                <span>{operation.icon}</span>
-                                <span>{operation.name}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      {/* 操作按钮组件 */}
+                      <OperationButton
+                        position={{
+                          left: 8 + 80 + 8,
+                          top: 0,
+                          menuLeft: ann.position.x + 8 + 80 + 8,
+                          menuTop: ann.position.y - 30 + 32
+                        }}
+                        showOperationMenu={showOperationMenu}
+                        setShowOperationMenu={setShowOperationMenu}
+                        currentAttachmentId={currentAttachmentId}
+                        setCurrentAttachmentId={setCurrentAttachmentId}
+                        getOperationTypes={getOperationTypes}
+                        handleOperationClick={handleOperationClick}
+                        ann={ann}
+                        attachments={attachments}
+                        pageNumber={pageNumber}
+                        onMenuToggle={(menuInfo) => {
+                          setCurrentMenu(menuInfo)
+                        }}
+                      />
                     </div>
                   )}
                 </div>
-              ))
+                )
+              })
             })()}
 
             {/* 渲染关联的图片标记（放到与页面同层） */}
@@ -3453,11 +3765,12 @@ const InteractivePDFViewer4 = ({ file }) => {
           style={{
             ...styles.contextMenu,
             left: contextMenuPos.x,
-            top: contextMenuPos.y
+            top: contextMenuPos.y,
+            zIndex: 50010,
           }}
         >
           {/* 文件类型选择菜单 */}
-          <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
+          <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef', zIndex: 50010 }}>
             <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
               📎 上传文件类型
             </div>
@@ -3553,6 +3866,100 @@ const InteractivePDFViewer4 = ({ file }) => {
                  uploadStatus.type === 'error' ? '#721c24' : '#856404'
         }}>
           {uploadStatus.message}
+        </div>
+      )}
+
+      {/* 独立渲染的菜单 - 脱离hover_region层级限制 */}
+      {currentMenu && currentMenu.show && (
+        <div
+          style={{
+            position: 'absolute',
+            left: currentMenu.position.left,
+            top: currentMenu.position.top,
+            background: 'white',
+            border: '1px solid #ddd',
+            borderRadius: 6,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 50010, // 使用超高z-index确保在最上层
+            minWidth: 120
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {currentMenu.type === 'upload' && (
+            <>
+              <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
+                <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
+                  📎 上传文件类型
+                </div>
+              </div>
+              {currentMenu.fileTypes.map(fileType => (
+                <div
+                  key={fileType.id}
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    backgroundColor: currentMenu.selectedFileType === fileType.id ? '#e3f2fd' : 'transparent',
+                    fontWeight: currentMenu.selectedFileType === fileType.id ? 'bold' : 'normal',
+                    borderBottom: fileType.id !== currentMenu.fileTypes[currentMenu.fileTypes.length - 1].id ? '1px solid #f0f0f0' : 'none'
+                  }}
+                  onClick={() => {
+                    currentMenu.uploadForAnnotation(currentMenu.ann)
+                    setCurrentMenu(null)
+                  }}
+                  onMouseEnter={(e) => {
+                    if (currentMenu.selectedFileType !== fileType.id) {
+                      currentMenu.setSelectedFileType(fileType.id)
+                      e.target.style.backgroundColor = '#f8f9fa'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (currentMenu.selectedFileType !== fileType.id) {
+                      e.target.style.backgroundColor = 'transparent'
+                    }
+                  }}
+                >
+                  {fileType.icon} {fileType.name}
+                </div>
+              ))}
+            </>
+          )}
+          
+          {currentMenu.type === 'operation' && (
+            <>
+              <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
+                <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
+                  ⚙️ 操作类型
+                </div>
+              </div>
+              {currentMenu.getOperationTypes(currentMenu.currentAttachmentId).map(operation => (
+                <button 
+                  key={operation.id}
+                  style={{
+                    ...styles.menuItem,
+                    backgroundColor: 'transparent',
+                    color: '#333',
+                    fontSize: 13,
+                    padding: '8px 12px',
+                    border: 'none',
+                    width: '100%',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                  onClick={() => {
+                    currentMenu.handleOperationClick(operation.action, currentMenu.ann.id)
+                    setCurrentMenu(null)
+                  }}
+                >
+                  <span>{operation.icon}</span>
+                  <span>{operation.name}</span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
 
@@ -3680,7 +4087,7 @@ const styles = {
     border: '1px solid #ccc',
     borderRadius: '6px',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-    zIndex: 1000,
+    zIndex: 10002,
     padding: '5px 0',
     minWidth: '150px'
   },
@@ -3703,7 +4110,7 @@ const styles = {
     padding: '12px 20px',
     borderRadius: '6px',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-    zIndex: 1000,
+    zIndex: 10001,
     fontSize: '14px',
     fontWeight: '500'
   },
@@ -3737,6 +4144,23 @@ const styles = {
     fontSize: '42px',
     pointerEvents: 'none'
   },
+  audioPlayOverlay: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'white',
+    fontSize: '42px',
+    pointerEvents: 'none',
+    cursor: 'pointer',
+    userSelect: 'none',
+    zIndex: 50000
+  },
   imageFitOverlay: {
     position: 'absolute',
     right: 6,
@@ -3755,7 +4179,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
-    zIndex: 1002 // 提高到最上层
+    zIndex: 10001 // 提高到最上层，高于音频播放按钮
   },
   overlayBtn: {
     background: 'rgba(0,0,0,0.55)',
@@ -3776,7 +4200,7 @@ const styles = {
     padding: '2px 6px',
     fontSize: 12,
     cursor: 'pointer',
-    zIndex: 17,
+    zIndex: 50005, // 使用超高z-index确保在最上层
     boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
   },
   hiddenToggle: {
