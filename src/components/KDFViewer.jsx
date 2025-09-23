@@ -107,24 +107,20 @@ const UploadFileButton = ({
   )
 }
 
-// 操作按钮组件
-const OperationButton = ({ 
+// 显示/隐藏按钮组件
+const VisibilityButton = ({ 
   position, 
-  showOperationMenu, 
-  setShowOperationMenu, 
-  currentAttachmentId, 
-  setCurrentAttachmentId,
-  getOperationTypes,
-  handleOperationClick,
   ann,
   attachments,
   pageNumber,
-  onMenuToggle // 新增：菜单切换回调
+  toggleAttachmentVisibility
 }) => {
   // 只在有附件时显示
-  const hasAttachment = attachments.some(att => att.pageNumber === pageNumber && att.targetId === ann.id)
+  const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === ann.id)
+  if (!attachment) return null
   
-  if (!hasAttachment) return null
+  const isHidden = attachment.hidden
+  const buttonText = isHidden ? '👁️ 显示' : '🙈 隐藏'
   
   return (
     <div
@@ -132,29 +128,52 @@ const OperationButton = ({
         ...styles.hoverBadge,
         left: position.left,
         top: position.top,
-        right: 'auto'
+        right: 'auto',
+        backgroundColor: isHidden ? '#6c757d' : '#17a2b8',
+        color: 'white'
       }}
       onClick={(e) => { 
-        e.stopPropagation(); 
-        setCurrentAttachmentId(ann.id)
-        const newShowState = !showOperationMenu
-        setShowOperationMenu(newShowState)
-        // 通知父组件菜单状态变化，传递菜单位置信息
-        onMenuToggle && onMenuToggle({
-          show: newShowState,
-          position: {
-            left: position.menuLeft,
-            top: position.menuTop
-          },
-          type: 'operation',
-          ann: ann,
-          currentAttachmentId: ann.id,
-          getOperationTypes: getOperationTypes,
-          handleOperationClick: handleOperationClick
-        })
+        e.stopPropagation()
+        toggleAttachmentVisibility(attachment.id)
       }}
+      title={isHidden ? '显示附件' : '隐藏附件'}
     >
-      ⚙️ 操作
+      {buttonText}
+    </div>
+  )
+}
+
+// 删除按钮组件
+const DeleteButton = ({ 
+  position, 
+  ann,
+  attachments,
+  pageNumber,
+  deleteAttachment
+}) => {
+  // 只在有附件时显示
+  const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === ann.id)
+  if (!attachment) return null
+  
+  return (
+    <div
+      style={{ 
+        ...styles.hoverBadge,
+        left: position.left,
+        top: position.top,
+        right: 'auto',
+        backgroundColor: '#dc3545',
+        color: 'white'
+      }}
+      onClick={(e) => { 
+        e.stopPropagation()
+        if (confirm('确定要删除这个附件吗？')) {
+          deleteAttachment(attachment.id)
+        }
+      }}
+      title="删除附件"
+    >
+      🗑️ 删除
     </div>
   )
 }
@@ -459,8 +478,7 @@ const KDFViewer = () => {
   const [currentTargetBlock, setCurrentTargetBlock] = useState(null) // { type: 'text'|'image', area, text? }
   const [selectedFileType, setSelectedFileType] = useState('image') // 默认选择图片
   const [showFileTypeMenu, setShowFileTypeMenu] = useState(false) // 控制悬浮按钮的文件类型菜单显示
-  const [showOperationMenu, setShowOperationMenu] = useState(false) // 控制操作菜单的显示
-  const [currentAttachmentId, setCurrentAttachmentId] = useState(null) // 当前选中的附件ID
+  // 操作菜单相关状态已移除，现在使用直接的显示/隐藏和删除按钮
   const [currentMenu, setCurrentMenu] = useState(null) // 当前显示的菜单信息
   
   // KDF相关状态
@@ -481,25 +499,7 @@ const KDFViewer = () => {
     { id: '3d', name: '3D模型', icon: '🎲', accept: '.obj,.fbx,.gltf,.glb,.dae,.ply,.stl' }
   ]
   
-  // 操作类型配置 - 动态生成，根据附件状态
-  const getOperationTypes = (targetId) => {
-    const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === targetId)
-    if (!attachment) return []
-    
-    const operations = []
-    
-    // 显示/隐藏按钮 - 根据当前状态动态显示
-    if (attachment.hidden) {
-      operations.push({ id: 'show', name: '显示', icon: '👁️', action: 'show' })
-    } else {
-      operations.push({ id: 'hide', name: '隐藏', icon: '🙈', action: 'hide' })
-    }
-    
-    // 删除按钮
-    operations.push({ id: 'delete', name: '删除', icon: '🗑️', action: 'delete' })
-    
-    return operations
-  }
+  // 操作类型配置函数已移除，现在使用直接的显示/隐藏和删除按钮
   const [pdfDoc, setPdfDoc] = useState(null)
   const [parsedByPage, setParsedByPage] = useState({}) // { [pageNumber]: Annotation[] }
   const [lpBlocksByPage, setLpBlocksByPage] = useState(null) // 后端(LP+PubLayNet)返回的原始结果
@@ -1398,42 +1398,20 @@ const KDFViewer = () => {
     setSelectedArea(null)
   }
 
-  // 处理操作菜单点击
-  const handleOperationClick = (operationType, targetId) => {
-    // 找到对应的附件
-    const attachment = attachments.find(att => att.pageNumber === pageNumber && att.targetId === targetId)
-    if (!attachment) return
-    
-    switch (operationType) {
-      case 'hide':
-        toggleAttachmentVisibility(attachment.id)
-        break
-      case 'show':
-        toggleAttachmentVisibility(attachment.id)
-        break
-      case 'delete':
-        deleteAttachment(attachment.id)
-        break
-      default:
-        break
-    }
-    setShowOperationMenu(false)
-    setCurrentAttachmentId(null)
-  }
+  // 处理操作菜单点击函数已移除，现在使用直接的显示/隐藏和删除按钮
 
   // 点击页面其他地方关闭菜单
   useEffect(() => {
     const handleClickOutside = () => {
       closeContextMenu()
       setShowFileTypeMenu(false)
-      setShowOperationMenu(false)
     }
     
-    if (showContextMenu || showFileTypeMenu || showOperationMenu) {
+    if (showContextMenu || showFileTypeMenu) {
       document.addEventListener('click', handleClickOutside)
       return () => document.removeEventListener('click', handleClickOutside)
     }
-  }, [showContextMenu, showFileTypeMenu, showOperationMenu])
+  }, [showContextMenu, showFileTypeMenu])
 
   // 用于跟踪当前处理的文件，避免重复请求
   const currentProcessingFileRef = useRef(null)
@@ -4285,26 +4263,28 @@ const KDFViewer = () => {
                         }}
                       />
                       
-                      {/* 操作按钮组件 */}
-                      <OperationButton
+                      {/* 显示/隐藏按钮 */}
+                      <VisibilityButton
                         position={{
-                          left: 8 + 80 + 8,
-                          top: 0,
-                          menuLeft: ann.position.x + 8 + 80 + 8,
-                          menuTop: ann.position.y - 30 + 32
+                          left: 8 + 80 + 8, // 上传按钮宽度(80) + 间距(8)
+                          top: 0
                         }}
-                        showOperationMenu={showOperationMenu}
-                        setShowOperationMenu={setShowOperationMenu}
-                        currentAttachmentId={currentAttachmentId}
-                        setCurrentAttachmentId={setCurrentAttachmentId}
-                        getOperationTypes={getOperationTypes}
-                        handleOperationClick={handleOperationClick}
                         ann={ann}
                         attachments={attachments}
                         pageNumber={pageNumber}
-                        onMenuToggle={(menuInfo) => {
-                          setCurrentMenu(menuInfo)
+                        toggleAttachmentVisibility={toggleAttachmentVisibility}
+                      />
+                      
+                      {/* 删除按钮 */}
+                      <DeleteButton
+                        position={{
+                          left: 8 + 80 + 8 + 80 + 8, // 上传按钮宽度(80) + 间距(8) + 显示/隐藏按钮宽度(80) + 间距(8)
+                          top: 0
                         }}
+                        ann={ann}
+                        attachments={attachments}
+                        pageNumber={pageNumber}
+                        deleteAttachment={deleteAttachment}
                       />
                     </div>
                   )}
@@ -4588,41 +4568,7 @@ const KDFViewer = () => {
             </>
           )}
           
-          {currentMenu.type === 'operation' && (
-            <>
-              <div style={{ padding: '4px 0', borderBottom: '1px solid #e9ecef' }}>
-                <div style={{ padding: '4px 12px', fontSize: 12, color: '#6c757d', fontWeight: 'bold' }}>
-                  ⚙️ 操作类型
-                </div>
-              </div>
-              {currentMenu.getOperationTypes(currentMenu.currentAttachmentId).map(operation => (
-                <button 
-                  key={operation.id}
-                  style={{
-                    ...styles.menuItem,
-                    backgroundColor: 'transparent',
-                    color: '#333',
-                    fontSize: 13,
-                    padding: '8px 12px',
-                    border: 'none',
-                    width: '100%',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}
-                  onClick={() => {
-                    currentMenu.handleOperationClick(operation.action, currentMenu.ann.id)
-                    setCurrentMenu(null)
-                  }}
-                >
-                  <span>{operation.icon}</span>
-                  <span>{operation.name}</span>
-                </button>
-              ))}
-            </>
-          )}
+          {/* 操作菜单已移除，现在使用直接的显示/隐藏和删除按钮 */}
         </div>
       )}
         </div>
