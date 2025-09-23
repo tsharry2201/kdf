@@ -3,6 +3,65 @@ import { Document, Page, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
 // CSS样式已在App.css中定义
 
+// KDF文件选择组件
+const KDFFileSelector = ({ onFileSelect, selectedFile, kdfFiles, loading }) => {
+  return (
+    <div style={{ marginBottom: '0', padding: '0' }}>
+      <h3 style={{ marginTop: 0, marginBottom: '15px', color: '#333', fontSize: '18px' }}>📚 KDF 数据库文件</h3>
+      
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+          <div>🔄 正在加载文件列表...</div>
+        </div>
+      ) : kdfFiles.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+          <div>📭 暂无可用文件</div>
+        </div>
+      ) : (
+        <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
+          {kdfFiles.map((file) => (
+            <div
+              key={file.id}
+              style={{
+                padding: '10px',
+                margin: '6px 0',
+                border: selectedFile?.id === file.id ? '2px solid #007bff' : '1px solid #ddd',
+                borderRadius: '6px',
+                backgroundColor: selectedFile?.id === file.id ? '#e3f2fd' : '#fff',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                fontSize: '14px'
+              }}
+              onClick={() => onFileSelect(file)}
+            >
+              <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#333', fontSize: '14px' }}>
+                📄 {file.name}
+              </div>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>
+                ID: {file.id} | {new Date(file.created_at).toLocaleDateString()}
+              </div>
+              <div style={{ fontSize: '10px', color: '#999', wordBreak: 'break-all' }}>
+                {file.url}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {selectedFile && (
+        <div style={{ marginTop: '15px', padding: '10px', backgroundColor: '#e8f5e8', borderRadius: '6px', border: '1px solid #4caf50' }}>
+          <div style={{ fontWeight: 'bold', color: '#2e7d32', marginBottom: '5px', fontSize: '14px' }}>
+            ✅ 已选择: {selectedFile.name}
+          </div>
+          <div style={{ fontSize: '11px', color: '#388e3c' }}>
+            准备下载并加载PDF文件...
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // 上传文件组件
 const UploadFileButton = ({ 
   position, 
@@ -330,7 +389,7 @@ const resolveSourceSize = ({ blocks, viewport, method }) => {
   return fallback
 }
 
-const InteractivePDFViewer4 = ({ file }) => {
+const KDFViewer = () => {
   // 添加视频进度条样式
   useEffect(() => {
     const style = document.createElement('style')
@@ -403,6 +462,16 @@ const InteractivePDFViewer4 = ({ file }) => {
   const [showOperationMenu, setShowOperationMenu] = useState(false) // 控制操作菜单的显示
   const [currentAttachmentId, setCurrentAttachmentId] = useState(null) // 当前选中的附件ID
   const [currentMenu, setCurrentMenu] = useState(null) // 当前显示的菜单信息
+  
+  // KDF相关状态
+  const [kdfFiles, setKdfFiles] = useState([]) // KDF文件列表
+  const [selectedKdfFile, setSelectedKdfFile] = useState(null) // 选中的KDF文件
+  const [kdfLoading, setKdfLoading] = useState(false) // KDF API加载状态
+  const [pdfFile, setPdfFile] = useState(null) // 下载的PDF文件
+  
+  // 多媒体保存状态
+  const [savingMultimedias, setSavingMultimedias] = useState(false) // 保存多媒体状态
+  const [loadingMultimedias, setLoadingMultimedias] = useState(false) // 加载多媒体状态
   
   // 文件类型配置
   const fileTypes = [
@@ -509,7 +578,7 @@ const InteractivePDFViewer4 = ({ file }) => {
       const blob = new Blob([jsonData], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      const base = (file?.name || 'document').replace(/\.pdf$/i, '')
+      const base = (pdfFile?.name || 'document').replace(/\.pdf$/i, '')
       a.href = url
       a.download = `${base}_detections.json`
       document.body.appendChild(a)
@@ -711,6 +780,7 @@ const InteractivePDFViewer4 = ({ file }) => {
           fileName: uploadedFile.name,
           fileSize: uploadedFile.size,
           fileType: uploadedFile.type,
+          file: uploadedFile, // 保存原始文件对象
           uploadedAt: new Date().toISOString(),
           targetType: currentTargetBlock?.type || 'image',
           targetText: currentTargetBlock?.text,
@@ -930,6 +1000,376 @@ const InteractivePDFViewer4 = ({ file }) => {
     setAttachments(prev => prev.map(a => a.id === attachmentId ? { ...a, hidden: !a.hidden } : a))
   }
 
+  // 计算文件的SHA256校验值
+  const calculateSHA256 = async (file) => {
+    const buffer = await file.arrayBuffer()
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+    return hashHex
+  }
+
+  // 根据targetId从lpBlocksByPage中查找对应的bboxid
+  const findBboxIdByTargetId = (targetId, pageNumber) => {
+    if (!lpBlocksByPage || !targetId) return null
+    
+    const pageKey = String(pageNumber)
+    const pageBlocks = lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber]
+    
+    if (!pageBlocks || !Array.isArray(pageBlocks)) return null
+    
+    // 查找匹配的bbox
+    const matchedBbox = pageBlocks.find(block => block.id === targetId)
+    
+    if (matchedBbox && matchedBbox.bboxid) {
+      console.log('找到匹配的bbox:', { targetId, bboxid: matchedBbox.bboxid })
+      return matchedBbox.bboxid
+    }
+    
+    console.warn('未找到匹配的bboxid:', { targetId, pageNumber })
+    return null
+  }
+
+  // 根据bbox ID加载多媒体文件
+  const loadMultimediasByBboxId = async (bboxId) => {
+    try {
+      console.log('加载bbox多媒体文件，ID:', bboxId)
+      const response = await fetch(`http://124.222.201.87:8080/api/v1/multimedias/bbox/${bboxId}`)
+      
+      if (!response.ok) {
+        throw new Error(`获取多媒体文件失败: ${response.status}`)
+      }
+      
+      const data = await response.json()
+      const multimedias = data.data.filter(multimedia => multimedia.status === 'completed') || []
+
+      
+      console.log('获取到的多媒体文件:', multimedias)
+      
+      if (multimedias.length === 0) {
+        console.log('该bbox没有多媒体文件')
+        return []
+      }
+      
+      // 为每个多媒体文件创建附件对象
+      const newAttachments = []
+      for (const multimedia of multimedias) {
+        try {
+          // 下载文件
+          console.log('下载文件:', multimedia.path)
+          const getBucketFromType = (fileType) => {
+            if (fileType.includes('image')) {
+              return 'images'
+            } else if (fileType.includes('video')) {
+              return 'videos'
+            } else if (fileType.includes('audio')) {
+              return 'audios'
+            } else if (fileType.includes('3d')) {
+              return 'models'
+            } else {
+              return 'others'
+            }
+          }
+          const fileResponse = await fetch(`http://124.222.201.87:8080/api/v1/file-upload/download/${multimedia.path}?bucket=${getBucketFromType(multimedia.type)}`)
+          
+          if (!fileResponse.ok) {
+            console.warn('文件下载失败:', multimedia.path)
+            continue
+          }
+          
+          const blob = await fileResponse.blob()
+          const file = new File([blob], multimedia.path.split('/').pop() || 'multimedia', { type: multimedia.type })
+          
+          // 根据bbox_id找到对应的bbox信息来获取正确的位置和尺寸
+          let bboxInfo = null
+          if (lpBlocksByPage) {
+            const pageKey = String(pageNumber)
+            const pageBlocks = lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber]
+            if (pageBlocks && Array.isArray(pageBlocks)) {
+              console.log('查找bbox信息:', {
+                multimedia_bbox_id: multimedia.bbox_id,
+                pageBlocks: pageBlocks.map(block => ({ id: block.id, bboxid: block.bboxid, type: block.type }))
+              })
+              bboxInfo = pageBlocks.find(block => block.bboxid === multimedia.bbox_id)
+              console.log('找到的bbox信息:', bboxInfo)
+            } else {
+              console.warn('页面blocks为空或不是数组:', pageBlocks)
+            }
+          } else {
+            console.warn('lpBlocksByPage为空')
+          }
+
+          // 生成更友好的文件名
+          const friendlyFileName = `multimedia_${multimedia.id}.${multimedia.type.includes('image') ? 'jpg' : 
+                                 multimedia.type.includes('video') ? 'mp4' : 
+                                 multimedia.type.includes('audio') ? 'mp3' : 'file'}`
+          
+          // 将PDF坐标转换为页面像素坐标
+          let convertedArea = { x: 0, y: 0, width: 200, height: 150 } // 默认尺寸
+          
+          if (bboxInfo && bboxInfo.bbox && Array.isArray(bboxInfo.bbox) && bboxInfo.bbox.length >= 4) {
+            // 使用与主坐标转换逻辑相同的参数
+            // 这些参数应该与parsedByPage中使用的参数保持一致
+            const sX = 0.86  // 与主逻辑保持一致
+            const sY = 0.86  // 与主逻辑保持一致
+            
+            // 获取页面偏移量 - 需要从当前页面元素获取
+            let offsetX = 0, offsetY = 0
+            
+            // 尝试从页面元素获取偏移量
+            const pageElement = pageWrapperRef.current?.querySelector(`[data-page-number="${pageNumber}"]`)
+            if (pageElement) {
+              const pageRect = pageElement.getBoundingClientRect()
+              const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
+              if (pageRect && wrapperRect) {
+                offsetX = pageRect.left - wrapperRect.left
+                offsetY = pageRect.top - wrapperRect.top
+              }
+            }
+            
+            // PDF坐标 [x1, y1, x2, y2] 转换为页面像素坐标
+            const x1 = bboxInfo.bbox[0] // Xmin
+            const y1 = bboxInfo.bbox[1] // Ymin
+            const x2 = bboxInfo.bbox[2] // Xmax
+            const y2 = bboxInfo.bbox[3] // Ymax
+            
+            const pxX = offsetX + x1 * sX
+            const pxY = offsetY + y1 * sY
+            const pxW = Math.max(1, (x2 - x1) * sX)
+            const pxH = Math.max(1, (y2 - y1) * sY)
+            
+            // 应用bbox调整参数
+            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
+            
+            convertedArea = {
+              x: Math.round(scaledPosition.x),
+              y: Math.round(scaledPosition.y),
+              width: Math.round(scaledPosition.width),
+              height: Math.round(scaledPosition.height)
+            }
+            
+            console.log('坐标转换:', {
+              originalBbox: bboxInfo.bbox,
+              convertedArea: convertedArea,
+              scale: { x: sX, y: sY },
+              offset: { x: offsetX, y: offsetY }
+            })
+          }
+          
+          // 创建附件对象
+          const attachment = {
+            id: `loaded_${multimedia.id}_${Date.now()}`,
+            pageNumber: pageNumber,
+            area: convertedArea,
+            fileName: friendlyFileName,
+            fileSize: file.size,
+            fileType: multimedia.type,
+            file: file,
+            uploadedAt: multimedia.created_at,
+            targetType: bboxInfo?.type || 'image',
+            targetId: bboxInfo?.id || multimedia.bbox_id.toString(),
+            targetName: bboxInfo?.name || null,
+            selectedFileType: multimedia.type.includes('image') ? 'image' : 
+                            multimedia.type.includes('video') ? 'video' :
+                            multimedia.type.includes('audio') ? 'audio' : 'image',
+            isVideo: multimedia.type.includes('video'),
+            isImage: multimedia.type.includes('image'),
+            isAudio: multimedia.type.includes('audio'),
+            is3DModel: multimedia.type.includes('3d') || multimedia.type.includes('model'),
+            videoUrl: multimedia.type.includes('video') ? URL.createObjectURL(file) : undefined,
+            imageUrl: multimedia.type.includes('image') ? URL.createObjectURL(file) : undefined,
+            audioUrl: multimedia.type.includes('audio') ? URL.createObjectURL(file) : undefined,
+            modelUrl: (multimedia.type.includes('3d') || multimedia.type.includes('model')) ? URL.createObjectURL(file) : undefined,
+            loaded: true, // 标记为从服务器加载的
+            multimediaId: multimedia.id
+          }
+          
+          newAttachments.push(attachment)
+          console.log('创建加载的附件:', attachment)
+          
+        } catch (error) {
+          console.error('处理多媒体文件失败:', multimedia, error)
+        }
+      }
+      
+      return newAttachments
+      
+    } catch (error) {
+      console.error('加载多媒体文件失败:', error)
+      return []
+    }
+  }
+
+  // 保存所有多媒体文件
+  const saveMultimedias = async () => {
+    if (attachments.length === 0) {
+      alert('没有要保存的多媒体文件')
+      return
+    }
+
+    setSavingMultimedias(true)
+    try {
+      console.log('开始保存多媒体文件，数量:', attachments.length)
+      
+      // 为每个附件创建多媒体记录并上传文件
+      for (const attachment of attachments) {
+        console.log('检查附件:', {
+          id: attachment.id,
+          targetId: attachment.targetId,
+          hasFile: !!attachment.file,
+          fileType: attachment.fileType,
+          fileName: attachment.fileName
+        })
+        
+        if (!attachment.file || !attachment.targetId) {
+          console.warn('跳过无效附件:', {
+            id: attachment.id,
+            hasFile: !!attachment.file,
+            targetId: attachment.targetId,
+            fileName: attachment.fileName
+          })
+          continue
+        }
+
+        // 计算文件校验值
+        const checksum = await calculateSHA256(attachment.file)
+        
+        // 查找对应的bboxid
+        const bboxId = findBboxIdByTargetId(attachment.targetId, attachment.pageNumber)
+        if (!bboxId) {
+          console.warn('无法找到对应的bboxid，跳过附件:', attachment)
+          continue
+        }
+        
+        // 构建多媒体记录
+        const multimediaData = {
+          type: attachment.isVideo ? 'video' : attachment.isAudio ? 'audio' : attachment.is3D ? '3d' : 'image',
+          path: `${checksum}/${attachment.fileName}`, 
+          size: attachment.file.size,
+          checksum: checksum,
+          status: 'pending',
+          user_id: 0,
+          bbox_id: bboxId // 使用从API获取的bboxid
+        }
+
+        console.log('创建多媒体记录:', multimediaData)
+
+        // 1. 创建多媒体记录
+        const createResponse = await fetch('http://124.222.201.87:8080/api/v1/multimedias', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(multimediaData)
+        })
+
+        if (!createResponse.ok) {
+          throw new Error(`创建多媒体记录失败: ${createResponse.status}`)
+        }
+
+        const createData = await createResponse.json()
+        const multimediaId = createData.data.id
+
+        console.log('多媒体记录创建成功，ID:', multimediaId)
+
+        // 2. 上传文件到OSS
+        const uploadFormData = new FormData()
+        uploadFormData.append('file', attachment.file)
+        uploadFormData.append('user_id', '0')
+        uploadFormData.append('path', checksum)
+        
+        const getBucketFromType = (fileType) => {
+          if (fileType.includes('image')) {
+            return 'images'
+          } else if (fileType.includes('video')) {
+            return 'videos'
+          } else if (fileType.includes('audio')) {
+            return 'audios'
+          } else if (fileType.includes('3d')) {
+            return 'models'
+          } else {
+            return 'others'
+          }
+        }
+        
+        uploadFormData.append('bucket', getBucketFromType(attachment.fileType))
+
+        const uploadResponse = await fetch('http://124.222.201.87:8080/api/v1/file-upload/from-form', {
+          method: 'POST',
+          body: uploadFormData
+        })
+
+        if (!uploadResponse.ok) {
+          throw new Error(`文件上传失败: ${uploadResponse.status}`)
+        }
+
+        const uploadData = await uploadResponse.json()
+        console.log('文件上传成功:', uploadData)
+
+        // 3. 更新多媒体记录状态为completed
+        const updateData = {
+          ...multimediaData,
+          path: multimediaData.path, // 保持原有的path格式：checksum/filename
+          status: 'completed'
+        }
+
+        const updateResponse = await fetch(`http://124.222.201.87:8080/api/v1/multimedias/${multimediaId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updateData)
+        })
+
+        if (!updateResponse.ok) {
+          throw new Error(`更新多媒体记录失败: ${updateResponse.status}`)
+        }
+
+        console.log('多媒体记录更新成功:', multimediaId)
+      }
+
+      alert('所有多媒体文件保存成功！')
+      console.log('所有多媒体文件保存完成')
+      
+      // 保存成功后，标记附件为已保存状态，而不是清除
+      setAttachments(prev => prev.map(attachment => ({
+        ...attachment,
+        saved: true,
+        savedAt: new Date().toISOString()
+      })))
+
+    } catch (error) {
+      console.error('保存多媒体文件失败:', error)
+      alert(`保存失败: ${error.message}`)
+    } finally {
+      setSavingMultimedias(false)
+    }
+  }
+
+  // 清除所有多媒体文件（只清除未保存的）
+  const clearAllMultimedias = () => {
+    const unsavedAttachments = attachments.filter(att => !att.saved && !att.loaded)
+    const savedAttachments = attachments.filter(att => att.saved || att.loaded)
+    
+    if (unsavedAttachments.length === 0) {
+      alert('没有要清除的未保存多媒体文件')
+      return
+    }
+
+    if (confirm(`确定要清除 ${unsavedAttachments.length} 个未保存的多媒体文件吗？\n（已保存的 ${savedAttachments.length} 个文件将保留）`)) {
+      // 清理URL对象（只清理未保存的）
+      unsavedAttachments.forEach(attachment => {
+        if (attachment.videoUrl) URL.revokeObjectURL(attachment.videoUrl)
+        if (attachment.imageUrl) URL.revokeObjectURL(attachment.imageUrl)
+        if (attachment.audioUrl) URL.revokeObjectURL(attachment.audioUrl)
+      })
+
+      // 只保留已保存的附件
+      setAttachments(savedAttachments)
+      console.log(`已清除 ${unsavedAttachments.length} 个未保存的多媒体文件，保留了 ${savedAttachments.length} 个已保存的文件`)
+    }
+  }
+
   // 确认/取消高亮
   const confirmHighlight = () => {
     if (!selectedArea || !selectedText) {
@@ -998,8 +1438,98 @@ const InteractivePDFViewer4 = ({ file }) => {
   // 用于跟踪当前处理的文件，避免重复请求
   const currentProcessingFileRef = useRef(null)
 
+  // 加载KDF文件列表
   useEffect(() => {
-    console.log('交互式编辑器useEffect触发，文件:', file?.name)
+    const loadKdfFiles = async () => {
+      try {
+        setKdfLoading(true)
+        console.log('正在加载KDF文件列表...')
+        const response = await fetch('http://124.222.201.87:8080/api/v1/kdfs')
+        
+        if (!response.ok) {
+          let errorMessage = `获取KDF文件列表失败 (${response.status})`
+          try {
+            const errorData = await response.text()
+            console.error('KDF文件列表API错误详情:', errorData)
+            if (errorData) {
+              try {
+                const errorJson = JSON.parse(errorData)
+                errorMessage = errorJson.message || errorJson.detail || errorMessage
+              } catch {
+                errorMessage = `获取KDF文件列表失败 (${response.status}): ${errorData.slice(0, 200)}`
+              }
+            }
+          } catch (e) {
+            console.error('解析KDF文件列表错误响应失败:', e)
+          }
+          throw new Error(errorMessage)
+        }
+        
+        const data = await response.json()
+        console.log('KDF文件列表加载成功:', data)
+        setKdfFiles(data.data || [])
+      } catch (error) {
+        console.error('加载KDF文件列表失败:', error)
+        setError(`加载KDF文件列表失败: ${error.message}`)
+      } finally {
+        setKdfLoading(false)
+      }
+    }
+    
+    loadKdfFiles()
+  }, [])
+
+  // 处理KDF文件选择和PDF下载
+  const handleKdfFileSelect = async (kdfFile) => {
+    try {
+      setSelectedKdfFile(kdfFile)
+      setLoading(true)
+      setError(null)
+      
+      console.log('开始下载PDF文件:', kdfFile.name, 'URL:', kdfFile.url)
+      
+      // 构建完整的下载URL
+      const downloadUrl = `http://124.222.201.87:8080/api/v1/file-upload/download/${kdfFile.url}/${kdfFile.name}?bucket=pdfs`
+      
+      // 下载PDF文件
+      const response = await fetch(downloadUrl)
+      if (!response.ok) {
+        let errorMessage = `下载PDF文件失败 (${response.status})`
+        try {
+          const errorData = await response.text()
+          console.error('服务器错误详情:', errorData)
+          if (errorData) {
+            try {
+              const errorJson = JSON.parse(errorData)
+              errorMessage = errorJson.message || errorJson.detail || errorMessage
+            } catch {
+              errorMessage = `下载PDF文件失败 (${response.status}): ${errorData.slice(0, 200)}`
+            }
+          }
+        } catch (e) {
+          console.error('解析错误响应失败:', e)
+        }
+        throw new Error(errorMessage)
+      }
+      
+      // 获取文件blob
+      const blob = await response.blob()
+      
+      // 创建File对象
+      const file = new File([blob], kdfFile.name, { type: 'application/pdf' })
+      
+      console.log('PDF文件下载成功:', file.name, '大小:', file.size)
+      setPdfFile(file)
+      
+    } catch (error) {
+      console.error('下载PDF文件失败:', error)
+      setError(`下载PDF文件失败: ${error.message}`)
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    console.log('KDF Viewer useEffect触发，文件:', pdfFile?.name)
     setLoading(true)
     setError(null)
     setPageNumber(1)
@@ -1014,25 +1544,25 @@ const InteractivePDFViewer4 = ({ file }) => {
     setLpError(null)
     
     // 文件健康检查
-    if (file) {
-      console.log('文件检查 - 大小:', file.size, '类型:', file.type)
+    if (pdfFile && selectedKdfFile) {
+      console.log('文件检查 - PDF大小:', pdfFile.size, '类型:', pdfFile.type, 'KDF ID:', selectedKdfFile.id)
       
       // 检查文件类型
-      if (file.type !== 'application/pdf') {
+      if (pdfFile.type !== 'application/pdf') {
         setError('文件类型不是PDF，请选择正确的PDF文件')
         setLoading(false)
         return
       }
       
       // 检查文件是否为空
-      if (file.size === 0) {
+      if (pdfFile.size === 0) {
         setError('文件为空，请选择有效的PDF文件')
         setLoading(false)
         return
       }
 
-      // 生成文件唯一标识符（文件名 + 大小 + 最后修改时间）
-      const fileId = `${file.name}-${file.size}-${file.lastModified}`
+      // 生成文件唯一标识符（KDF ID + PDF文件名 + 大小）
+      const fileId = `kdf-${selectedKdfFile.id}-${pdfFile.name}-${pdfFile.size}`
       
       // 如果正在处理同一个文件，直接返回（避免重复处理）
       if (currentProcessingFileRef.current === fileId) {
@@ -1044,32 +1574,50 @@ const InteractivePDFViewer4 = ({ file }) => {
       // 标记当前处理的文件
       currentProcessingFileRef.current = fileId
       
-      // 触发后端解析（LayoutParser + PubLayNet）
+      // 获取KDF边界框数据
       ;(async () => {
         try {
           setLpParsing(true)
           setLpError(null)
-          const fd = new FormData()
-          fd.append('files', file)
-          fd.append('return_content_list', 'true')
-          fd.append('return_md', 'false')
-          fd.append('return_layout', 'false')
-          fd.append('return_middle_json', 'false')
-          fd.append('return_model_output', 'false')
           
-          console.log('发送解析请求，文件ID:', fileId)
-          const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
+          // 获取选中的KDF文件ID
+          const kdfId = selectedKdfFile?.id
+          if (!kdfId) {
+            throw new Error('未选择KDF文件')
+          }
+          
+          console.log('发送KDF边界框请求，KDF ID:', kdfId)
+          const resp = await fetch(`http://124.222.201.87:8080/api/v1/bboxes/kdf/${kdfId}/job`, { 
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          })
           
           if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}))
-            throw new Error(err?.detail || `后端解析失败(${resp.status})`)
+            let errorMessage = `获取KDF边界框失败 (${resp.status})`
+            try {
+              const errorData = await resp.text()
+              console.error('KDF边界框API错误详情:', errorData)
+              if (errorData) {
+                try {
+                  const errorJson = JSON.parse(errorData)
+                  errorMessage = errorJson.message || errorJson.detail || errorMessage
+                } catch {
+                  errorMessage = `获取KDF边界框失败 (${resp.status}): ${errorData.slice(0, 200)}`
+                }
+              }
+            } catch (e) {
+              console.error('解析KDF边界框错误响应失败:', e)
+            }
+            throw new Error(errorMessage)
           }
           const data = await resp.json()
-          console.log('解析请求成功，文件ID:', fileId, data)
-          // data: { jobId, blocksByPage }
-          setLpBlocksByPage(data?.blocksByPage || {})
+          console.log('KDF边界框请求成功，KDF ID:', kdfId, data)
+          // data: { data: { jobId, blocksByPage } }
+          setLpBlocksByPage(data?.data?.blocksByPage || {})
         } catch (e) {
-          console.error('后端PubLayNet解析失败:', e)
+          console.error('获取KDF边界框失败:', e)
           setLpError(String(e?.message || e))
         } finally {
           setLpParsing(false)
@@ -1084,7 +1632,7 @@ const InteractivePDFViewer4 = ({ file }) => {
       // 清理处理状态
       currentProcessingFileRef.current = null
     }
-  }, [file])
+  }, [pdfFile, selectedKdfFile])
 
   // 当页面改变时重置缩放比例和内容尺寸
   useEffect(() => {
@@ -1102,6 +1650,60 @@ const InteractivePDFViewer4 = ({ file }) => {
       })
     }
   }, [pageScale, pageNumber, basePageSize])
+
+  // 当页面或bbox数据变化时，加载多媒体文件
+  useEffect(() => {
+    const loadPageMultimedias = async () => {
+      if (!lpBlocksByPage || !pageNumber) return
+      
+      const pageKey = String(pageNumber)
+      const pageBlocks = lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber]
+      
+      if (!pageBlocks || !Array.isArray(pageBlocks)) return
+      
+      setLoadingMultimedias(true)
+      console.log('开始加载页面多媒体文件，页数:', pageNumber)
+      
+      try {
+        // 获取当前页面的所有bbox ID
+        const bboxIds = pageBlocks.map(block => block.bboxid).filter(id => id)
+        
+        if (bboxIds.length === 0) {
+          console.log('当前页面没有bbox ID')
+          return
+        }
+        
+        console.log('当前页面的bbox IDs:', bboxIds)
+        
+        // 为每个bbox加载多媒体文件
+        const allLoadedAttachments = []
+        for (const bboxId of bboxIds) {
+          const attachments = await loadMultimediasByBboxId(bboxId)
+          allLoadedAttachments.push(...attachments)
+        }
+        
+        // 过滤掉已经存在的附件（避免重复）
+        setAttachments(prev => {
+          const existingIds = new Set(prev.map(att => att.multimediaId).filter(id => id))
+          const newAttachments = allLoadedAttachments.filter(att => !existingIds.has(att.multimediaId))
+          
+          if (newAttachments.length > 0) {
+            console.log('添加新的加载附件:', newAttachments)
+            return [...prev, ...newAttachments]
+          }
+          
+          return prev
+        })
+        
+      } catch (error) {
+        console.error('加载页面多媒体文件失败:', error)
+      } finally {
+        setLoadingMultimedias(false)
+      }
+    }
+    
+    loadPageMultimedias()
+  }, [pageNumber, lpBlocksByPage])
 
   // 解析当前页（优先使用后端 LayoutParser + PubLayNet 结果）
   useEffect(() => {
@@ -2982,21 +3584,24 @@ const InteractivePDFViewer4 = ({ file }) => {
   }
 
   return (
-    <div style={styles.container} className="interactive-pdf-container">
-      {!file && (
-        <div style={styles.noFile}>
-          <p>请先上传一个PDF文件来使用交互式编辑器</p>
-        </div>
-      )}
-      
-      {loading && <div style={styles.loading}>PDF 加载中...</div>}
-      
-      {error && <div style={styles.error}>{error}</div>}
+    <div style={{ display: 'flex', height: '100vh', width: '100%' }}>
+      {/* 左侧：PDF内容区域 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div style={styles.container} className="interactive-pdf-container">
+          {!pdfFile && (
+            <div style={styles.noFile}>
+              <p>请先从右侧KDF数据库中选择一个PDF文件</p>
+            </div>
+          )}
+          
+          {loading && <div style={styles.loading}>PDF 加载中...</div>}
+          
+          {error && <div style={styles.error}>{error}</div>}
 
       {/* 控制按钮 */}
       <div style={{ 
         ...styles.controls,
-        display: loading || error || !file ? 'none' : 'flex'
+        display: loading || error || !pdfFile ? 'none' : 'flex'
       }}>
         <button 
           style={styles.button} 
@@ -3094,21 +3699,53 @@ const InteractivePDFViewer4 = ({ file }) => {
 
         {/* 放大/缩小功能按需求已移除 */}
 
+        {/* 多媒体文件管理按钮 */}
+        {attachments.length > 0 && (
+          <>
+            {attachments.filter(att => !att.saved && !att.loaded).length > 0 && (
+              <button 
+                style={{
+                  ...styles.button,
+                  backgroundColor: '#28a745', 
+                  color: 'white',
+                  marginLeft: '8px'
+                }} 
+                onClick={saveMultimedias}
+                disabled={savingMultimedias}
+              >
+                {savingMultimedias ? '💾 保存中...' : `💾 保存多媒体 (${attachments.filter(att => !att.saved && !att.loaded).length})`}
+              </button>
+            )}
+            <button 
+              style={{
+                ...styles.button,
+                backgroundColor: '#dc3545', 
+                color: 'white',
+                marginLeft: '8px'
+              }} 
+              onClick={clearAllMultimedias}
+            >
+              🗑️ 撤销未保存
+            </button>
+          </>
+        )}
+
       </div>
 
       {/* 状态信息 */}
       <div style={{ 
         ...styles.statusBar,
-        display: loading || error || !file ? 'none' : 'flex'
+        display: loading || error || !pdfFile ? 'none' : 'flex'
       }}>
         <span>高亮: {highlights.filter(h => h.pageNumber === pageNumber).length} 个</span>
         <span>附件: {attachments.filter(a => a.pageNumber === pageNumber).length} 个</span>
         <span>关联图片: {associatedImages.filter(img => img.pageNumber === pageNumber).length} 个</span>
+        {loadingMultimedias && <span style={{ color: '#007bff' }}>🔄 加载多媒体中...</span>}
       </div>
 
       {/* PDF页面容器 - 使用CropBox尺寸，限制画布范围 */}
       <div style={{
-        display: loading || error || !file ? 'none' : 'block',
+        display: loading || error || !pdfFile ? 'none' : 'block',
         padding: '20px',
         margin: '0 auto',
         maxWidth: '100%',
@@ -3150,7 +3787,7 @@ const InteractivePDFViewer4 = ({ file }) => {
             onContextMenu={handleContextMenu}
           >
             <Document
-              file={file}
+              file={pdfFile}
               onLoadSuccess={onDocumentLoadSuccess}
               onLoadError={onDocumentLoadError}
               options={documentOptions}
@@ -3988,7 +4625,25 @@ const InteractivePDFViewer4 = ({ file }) => {
           )}
         </div>
       )}
+        </div>
+      </div>
 
+      {/* 右侧：KDF文件选择器 */}
+      <div style={{ 
+        width: '350px', 
+        backgroundColor: '#f8f9fa', 
+        borderLeft: '1px solid #dee2e6',
+        overflowY: 'auto',
+        padding: '20px',
+        boxSizing: 'border-box'
+      }}>
+        <KDFFileSelector 
+          onFileSelect={handleKdfFileSelect}
+          selectedFile={selectedKdfFile}
+          kdfFiles={kdfFiles}
+          loading={kdfLoading}
+        />
+      </div>
     </div>
   )
 }
@@ -4241,6 +4896,6 @@ const styles = {
     lineHeight: '22px'
   }
 }  
-export default InteractivePDFViewer4
+export default KDFViewer
 
 
