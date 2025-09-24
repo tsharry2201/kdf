@@ -1,66 +1,7 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
 // CSS样式已在App.css中定义
-
-// KDF文件选择组件
-const KDFFileSelector = ({ onFileSelect, selectedFile, kdfFiles, loading }) => {
-  return (
-    <div style={{ marginBottom: '0', padding: '0' }}>
-      <h3 style={{ marginTop: 0, marginBottom: '15px', color: '#333', fontSize: '18px' }}>📚 KDF 数据库文件</h3>
-      
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          <div>🔄 正在加载文件列表...</div>
-        </div>
-      ) : kdfFiles.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          <div>📭 暂无可用文件</div>
-        </div>
-      ) : (
-        <div style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
-          {kdfFiles.map((file) => (
-            <div
-              key={file.id}
-              style={{
-                padding: '10px',
-                margin: '6px 0',
-                border: selectedFile?.id === file.id ? '2px solid #007bff' : '1px solid #ddd',
-                borderRadius: '6px',
-                backgroundColor: selectedFile?.id === file.id ? '#e3f2fd' : '#fff',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                fontSize: '14px'
-              }}
-              onClick={() => onFileSelect(file)}
-            >
-              <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#333', fontSize: '14px' }}>
-                📄 {file.name}
-              </div>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>
-                ID: {file.id} | {new Date(file.created_at).toLocaleDateString()}
-              </div>
-              <div style={{ fontSize: '10px', color: '#999', wordBreak: 'break-all' }}>
-                {file.url}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      
-      {selectedFile && (
-        <div style={{ marginTop: '15px', padding: '10px', backgroundColor: '#e8f5e8', borderRadius: '6px', border: '1px solid #4caf50' }}>
-          <div style={{ fontWeight: 'bold', color: '#2e7d32', marginBottom: '5px', fontSize: '14px' }}>
-            ✅ 已选择: {selectedFile.name}
-          </div>
-          <div style={{ fontSize: '11px', color: '#388e3c' }}>
-            准备下载并加载PDF文件...
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // 上传文件组件
 const UploadFileButton = ({ 
@@ -148,10 +89,15 @@ const VideoProgressBar = ({
   attachment, 
   videoStates, 
   handleVideoProgressChange, 
-  formatTime 
+  formatTime,
+  onPlayPause,
+  onSpeedChange,
+  onFullscreen
 }) => {
   const hasStartedPlaying = videoStates[attachment.id]?.hasStarted
   const duration = videoStates[attachment.id]?.duration
+  const isPlaying = videoStates[attachment.id]?.playing
+  const playbackRate = videoStates[attachment.id]?.playbackRate || 1
   
   if (!hasStartedPlaying || !duration || duration <= 0) return null
   
@@ -170,7 +116,8 @@ const VideoProgressBar = ({
         boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      {/* 进度条 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
         <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
           {formatTime(videoStates[attachment.id]?.currentTime || 0)}
         </span>
@@ -191,6 +138,76 @@ const VideoProgressBar = ({
         <span style={{ color: 'white', fontSize: '12px', minWidth: '35px' }}>
           {formatTime(duration)}
         </span>
+      </div>
+      
+      {/* 控制按钮 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* 播放/暂停按钮 */}
+          <button
+            onClick={() => onPlayPause(attachment.id)}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '4px',
+              color: 'white',
+              padding: '6px 12px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+            onMouseEnter={(e) => e.target.style.background = 'rgba(255,255,255,0.3)'}
+            onMouseLeave={(e) => e.target.style.background = 'rgba(255,255,255,0.2)'}
+          >
+            {isPlaying ? '⏸️' : '▶️'}
+            {isPlaying ? '暂停' : '播放'}
+          </button>
+          
+          {/* 倍速选择 */}
+          <select
+            value={playbackRate}
+            onChange={(e) => onSpeedChange(attachment.id, parseFloat(e.target.value))}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '4px',
+              color: 'white',
+              padding: '6px 8px',
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            <option value={0.5} style={{ background: '#333', color: 'white' }}>0.5x</option>
+            <option value={0.75} style={{ background: '#333', color: 'white' }}>0.75x</option>
+            <option value={1} style={{ background: '#333', color: 'white' }}>1x</option>
+            <option value={1.25} style={{ background: '#333', color: 'white' }}>1.25x</option>
+            <option value={1.5} style={{ background: '#333', color: 'white' }}>1.5x</option>
+            <option value={2} style={{ background: '#333', color: 'white' }}>2x</option>
+          </select>
+        </div>
+        
+        {/* 全屏按钮 */}
+        <button
+          onClick={() => onFullscreen(attachment.id)}
+          style={{
+            background: 'rgba(255,255,255,0.2)',
+            border: 'none',
+            borderRadius: '4px',
+            color: 'white',
+            padding: '6px 12px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+          onMouseEnter={(e) => e.target.style.background = 'rgba(255,255,255,0.3)'}
+          onMouseLeave={(e) => e.target.style.background = 'rgba(255,255,255,0.2)'}
+        >
+          ⛶ 全屏
+        </button>
       </div>
     </div>
   )
@@ -373,7 +390,7 @@ const resolveSourceSize = ({ blocks, viewport, method }) => {
   return fallback
 }
 
-const KDFReader = () => {
+const KDFReader = ({ file }) => {
   // 添加视频进度条样式
   useEffect(() => {
     const style = document.createElement('style')
@@ -431,27 +448,18 @@ const KDFReader = () => {
   const [pageNumber, setPageNumber] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [selectedText, setSelectedText] = useState('')
-  const [selectedArea, setSelectedArea] = useState(null)
-  const [showContextMenu, setShowContextMenu] = useState(false)
-  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
-  const [highlights, setHighlights] = useState([])
-  const [attachments, setAttachments] = useState([])
-  const [uploadStatus, setUploadStatus] = useState(null)
-  const [showHighlightConfirm, setShowHighlightConfirm] = useState(false)
-  const [highlightConfirmPos, setHighlightConfirmPos] = useState({ x: 0, y: 0 })
   const [currentTargetBlock, setCurrentTargetBlock] = useState(null) // { type: 'text'|'image', area, text? }
   const [selectedFileType, setSelectedFileType] = useState('image') // 默认选择图片
   const [showFileTypeMenu, setShowFileTypeMenu] = useState(false) // 控制悬浮按钮的文件类型菜单显示
   // 操作菜单相关状态已移除，现在使用直接的显示/隐藏按钮
   const [currentMenu, setCurrentMenu] = useState(null) // 当前显示的菜单信息
   
-  // KDF相关状态
-  const [kdfFiles, setKdfFiles] = useState([]) // KDF文件列表
-  const [selectedKdfFile, setSelectedKdfFile] = useState(null) // 选中的KDF文件
-  const [kdfLoading, setKdfLoading] = useState(false) // KDF API加载状态
-  const [pdfFile, setPdfFile] = useState(null) // 下载的PDF文件
-  
+  const [pdfFile, setPdfFile] = useState(null) // 当前PDF文件
+
+  useEffect(() => {
+    setPdfFile(file || null)
+  }, [file])
+
   // 多媒体保存状态
   const [savingMultimedias, setSavingMultimedias] = useState(false) // 保存多媒体状态
   const [loadingMultimedias, setLoadingMultimedias] = useState(false) // 加载多媒体状态
@@ -478,11 +486,15 @@ const KDFReader = () => {
   const [manualOffset, setManualOffset] = useState({ x: -2, y: -1 }) // 手动调整偏移
   const [usePageScale, setUsePageScale] = useState(true) // 是否使用pageScale
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
-  const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
+  const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number, playbackRate: number, isFullscreen: boolean } }
   const videoRefs = useRef({}) // 保持每个视频的ref
   const [audioStates, setAudioStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
   const audioRefs = useRef({}) // 保持每个音频的ref
   const [imageStates, setImageStates] = useState({}) // { [attachmentId]: { fit: 'cover'|'contain' } }
+  const [attachments, setAttachments] = useState([]) // 附件列表
+  const [uploadStatus, setUploadStatus] = useState(null) // 上传状态
+  const [showContextMenu, setShowContextMenu] = useState(false) // 上下文菜单显示状态
+  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 }) // 上下文菜单位置
   const [hoveredAnnId, setHoveredAnnId] = useState(null) // 悬浮中的图/表块
   const [bboxTuning, setBBoxTuning] = useState({
     scaleX: 0.91,
@@ -526,35 +538,6 @@ const KDFReader = () => {
     setLoading(false)
   }
 
-  // 下载JSON（优先下载后端PubLayNet返回的结果）
-  const downloadDetectionsJSON = () => {
-    try {
-      let exportData = null
-      if (lpBlocksByPage && Object.keys(lpBlocksByPage).length > 0) {
-        exportData = lpBlocksByPage
-      } else if (parsedByPage && Object.keys(parsedByPage).length > 0) {
-        // 回退：导出当前内存中的标注（容器像素坐标）
-        exportData = parsedByPage
-      } else {
-        alert('暂无可导出的检测结果')
-        return
-      }
-      const jsonData = JSON.stringify(exportData, null, 2)
-      const blob = new Blob([jsonData], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      const base = (pdfFile?.name || 'document').replace(/\.pdf$/i, '')
-      a.href = url
-      a.download = `${base}_detections.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      console.error('导出JSON失败:', e)
-      alert('导出JSON失败: ' + (e?.message || e))
-    }
-  }
 
   const goToPrevPage = () => {
     setPageNumber(prev => Math.max(prev - 1, 1))
@@ -573,47 +556,6 @@ const KDFReader = () => {
   
   // 移除手动缩放（按需可再开启）
 
-  // 处理文本选择 - 左键拖拽后弹出“是否高亮”确认
-  const handleTextSelection = (event) => {
-    console.log('文本选择事件触发')
-    setTimeout(() => {
-      const selection = window.getSelection()
-      const selectedText = selection.toString().trim()
-      console.log('选中的文本:', selectedText)
-      
-      if (selectedText) {
-        setSelectedText(selectedText)
-        
-        try {
-          // 获取选中区域的位置
-          const range = selection.getRangeAt(0)
-          const rect = range.getBoundingClientRect()
-          const pageRect = pageWrapperRef.current?.getBoundingClientRect()
-          
-          console.log('选中区域rect:', rect)
-          console.log('页面rect:', pageRect)
-          
-          if (pageRect) {
-            const selectedArea = {
-              x: rect.left - pageRect.left,
-              y: rect.top - pageRect.top,
-              width: rect.width,
-              height: rect.height,
-              text: selectedText
-            }
-            setSelectedArea(selectedArea)
-            setCurrentTargetBlock({ type: 'text', area: selectedArea, text: selectedText })
-            console.log('设置选中区域:', selectedArea)
-            // 弹出确认气泡
-            setHighlightConfirmPos({ x: rect.right, y: Math.max(0, rect.top - 36) })
-            setShowHighlightConfirm(true)
-          }
-        } catch (error) {
-          console.error('获取选中区域位置失败:', error)
-        }
-      }
-    }, 100) // 延迟一点确保选择完成
-  }
 
   // 处理右键菜单 - 阅读器模式已禁用
   const handleContextMenu = (event) => {
@@ -628,43 +570,13 @@ const KDFReader = () => {
     setShowContextMenu(false)
   }
 
-  // 高亮选中的文本
-  const highlightSelectedText = () => {
-    if (selectedArea && selectedText) {
-      const newHighlight = {
-        id: `highlight_${Date.now()}`,
-        pageNumber,
-        area: selectedArea,
-        text: selectedText,
-        color: '#ffff00',
-        createdAt: new Date().toISOString()
-      }
-      
-      setHighlights(prev => [...prev, newHighlight])
-      setShowContextMenu(false)
-      
-      // 清除选择
-      window.getSelection().removeAllRanges()
-      setSelectedText('')
-      setSelectedArea(null)
-    }
-  }
-
-  // 移除高亮
-  const removeHighlight = (highlightId) => {
-    setHighlights(prev => prev.filter(h => h.id !== highlightId))
-  }
 
   // 触发文件上传
   const triggerFileUpload = () => {
     // 在真正上传前，基于当前选择/点击，匹配解析块，记录到 currentTargetBlock
     const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
     let matched = null
-    if (selectedArea && selectedText) {
-      // 选中文本时也优先匹配最近图片
-      matched = matchVisualAnnotation(selectedArea) || matchAnnotation(selectedArea)
-      if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
-    } else if (wrapperRect) {
+    if (wrapperRect) {
       // 右键点击优先匹配图片
       matched = matchVisualAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
       if (matched) setCurrentTargetBlock({ type: matched.type || 'image', area: matched.position, text: matched.content, targetId: matched.id, targetName: matched.name })
@@ -786,8 +698,10 @@ const KDFReader = () => {
         ...prev, 
         [attId]: { 
           ...prev[attId], 
-          playing: true, 
-          hasStarted: true 
+          playing: true,
+          hasStarted: true,
+          playbackRate: prev[attId]?.playbackRate || 1,
+          isFullscreen: prev[attId]?.isFullscreen || false
         } 
       }))
     } else {
@@ -796,9 +710,63 @@ const KDFReader = () => {
         ...prev, 
         [attId]: { 
           ...prev[attId], 
-          playing: false 
+          playing: false
         } 
       }))
+    }
+  }
+
+  // 播放/暂停视频（用于控制按钮）
+  const handleVideoPlayPause = (attId) => {
+    toggleVideoPlay(attId)
+  }
+
+  // 改变视频播放速度
+  const handleVideoSpeedChange = (attId, speed) => {
+    const el = videoRefs.current[attId]
+    if (!el) return
+    
+    el.playbackRate = speed
+    setVideoStates(prev => ({ 
+      ...prev, 
+      [attId]: { 
+        ...prev[attId], 
+        playbackRate: speed
+      } 
+    }))
+  }
+
+  // 全屏功能
+  const handleVideoFullscreen = (attId) => {
+    const el = videoRefs.current[attId]
+    if (!el) return
+    
+    if (!document.fullscreenElement) {
+      // 进入全屏
+      el.requestFullscreen().then(() => {
+        setVideoStates(prev => ({ 
+          ...prev, 
+          [attId]: { 
+            ...prev[attId], 
+            isFullscreen: true
+          } 
+        }))
+      }).catch(err => {
+        console.error('进入全屏失败:', err)
+      })
+    } else {
+      // 退出全屏
+      document.exitFullscreen().then(() => {
+        setVideoStates(prev => ({ 
+          ...prev, 
+          [attId]: { 
+            ...prev[attId], 
+            isFullscreen: false
+          } 
+        }))
+      }).catch(err => {
+        console.error('退出全屏失败:', err)
+      })
     }
   }
 
@@ -1313,33 +1281,6 @@ const KDFReader = () => {
     }
   }
 
-  // 确认/取消高亮
-  const confirmHighlight = () => {
-    if (!selectedArea || !selectedText) {
-      setShowHighlightConfirm(false)
-      return
-    }
-    const newHighlight = {
-      id: `highlight_${Date.now()}`,
-      pageNumber,
-      area: selectedArea,
-      text: selectedText,
-      color: '#ffff00',
-      createdAt: new Date().toISOString()
-    }
-    setHighlights(prev => [...prev, newHighlight])
-    setShowHighlightConfirm(false)
-    window.getSelection().removeAllRanges()
-    setSelectedText('')
-    setSelectedArea(null)
-  }
-
-  const cancelHighlight = () => {
-    setShowHighlightConfirm(false)
-    window.getSelection().removeAllRanges()
-    setSelectedText('')
-    setSelectedArea(null)
-  }
 
   // 处理操作菜单点击函数已移除，现在使用直接的显示/隐藏按钮
 
@@ -1359,201 +1300,84 @@ const KDFReader = () => {
   // 用于跟踪当前处理的文件，避免重复请求
   const currentProcessingFileRef = useRef(null)
 
-  // 加载KDF文件列表
-  useEffect(() => {
-    const loadKdfFiles = async () => {
-      try {
-        setKdfLoading(true)
-        console.log('正在加载KDF文件列表...')
-        const response = await fetch('http://124.222.201.87:8080/api/v1/kdfs')
-        
-        if (!response.ok) {
-          let errorMessage = `获取KDF文件列表失败 (${response.status})`
-          try {
-            const errorData = await response.text()
-            console.error('KDF文件列表API错误详情:', errorData)
-            if (errorData) {
-              try {
-                const errorJson = JSON.parse(errorData)
-                errorMessage = errorJson.message || errorJson.detail || errorMessage
-              } catch {
-                errorMessage = `获取KDF文件列表失败 (${response.status}): ${errorData.slice(0, 200)}`
-              }
-            }
-          } catch (e) {
-            console.error('解析KDF文件列表错误响应失败:', e)
-          }
-          throw new Error(errorMessage)
-        }
-        
-        const data = await response.json()
-        console.log('KDF文件列表加载成功:', data)
-        setKdfFiles(data.data || [])
-      } catch (error) {
-        console.error('加载KDF文件列表失败:', error)
-        setError(`加载KDF文件列表失败: ${error.message}`)
-      } finally {
-        setKdfLoading(false)
-      }
-    }
-    
-    loadKdfFiles()
-  }, [])
-
-  // 处理KDF文件选择和PDF下载
-  const handleKdfFileSelect = async (kdfFile) => {
-    try {
-      setSelectedKdfFile(kdfFile)
-      setLoading(true)
-      setError(null)
-      
-      console.log('开始下载PDF文件:', kdfFile.name, 'URL:', kdfFile.url)
-      
-      // 构建完整的下载URL
-      const downloadUrl = `http://124.222.201.87:8080/api/v1/file-upload/download/${kdfFile.url}/${kdfFile.name}?bucket=pdfs`
-      
-      // 下载PDF文件
-      const response = await fetch(downloadUrl)
-      if (!response.ok) {
-        let errorMessage = `下载PDF文件失败 (${response.status})`
-        try {
-          const errorData = await response.text()
-          console.error('服务器错误详情:', errorData)
-          if (errorData) {
-            try {
-              const errorJson = JSON.parse(errorData)
-              errorMessage = errorJson.message || errorJson.detail || errorMessage
-            } catch {
-              errorMessage = `下载PDF文件失败 (${response.status}): ${errorData.slice(0, 200)}`
-            }
-          }
-        } catch (e) {
-          console.error('解析错误响应失败:', e)
-        }
-        throw new Error(errorMessage)
-      }
-      
-      // 获取文件blob
-      const blob = await response.blob()
-      
-      // 创建File对象
-      const file = new File([blob], kdfFile.name, { type: 'application/pdf' })
-      
-      console.log('PDF文件下载成功:', file.name, '大小:', file.size)
-      setPdfFile(file)
-      
-    } catch (error) {
-      console.error('下载PDF文件失败:', error)
-      setError(`下载PDF文件失败: ${error.message}`)
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    console.log('KDF Viewer useEffect触发，文件:', pdfFile?.name)
-    setLoading(true)
+      useEffect(() => {
+    console.log('KDF Reader useEffect触发，文件:', pdfFile?.name)
     setError(null)
     setPageNumber(1)
     setPageScale(1) // 重置缩放比例
     setContentDimensions({ width: 'auto', height: 'auto' }) // 重置内容尺寸
-    setHighlights([])
     setAttachments([])
     setAssociatedImages([]) // 重置关联图片
     setParsedByPage({})
     setLpBlocksByPage(null)
     setLpParsing(false)
     setLpError(null)
-    
-    // 文件健康检查
-    if (pdfFile && selectedKdfFile) {
-      console.log('文件检查 - PDF大小:', pdfFile.size, '类型:', pdfFile.type, 'KDF ID:', selectedKdfFile.id)
-      
-      // 检查文件类型
-      if (pdfFile.type !== 'application/pdf') {
-        setError('文件类型不是PDF，请选择正确的PDF文件')
-        setLoading(false)
-        return
-      }
-      
-      // 检查文件是否为空
-      if (pdfFile.size === 0) {
-        setError('文件为空，请选择有效的PDF文件')
-        setLoading(false)
-        return
-      }
 
-      // 生成文件唯一标识符（KDF ID + PDF文件名 + 大小）
-      const fileId = `kdf-${selectedKdfFile.id}-${pdfFile.name}-${pdfFile.size}`
-      
-      // 如果正在处理同一个文件，直接返回（避免重复处理）
-      if (currentProcessingFileRef.current === fileId) {
-        console.log('文件已在处理中，跳过重复请求')
-        setLoading(false)
-        return
-      }
-      
-      // 标记当前处理的文件
-      currentProcessingFileRef.current = fileId
-      
-      // 获取KDF边界框数据
-      ;(async () => {
-        try {
-          setLpParsing(true)
-          setLpError(null)
-          
-          // 获取选中的KDF文件ID
-          const kdfId = selectedKdfFile?.id
-          if (!kdfId) {
-            throw new Error('未选择KDF文件')
-          }
-          
-          console.log('发送KDF边界框请求，KDF ID:', kdfId)
-          const resp = await fetch(`http://124.222.201.87:8080/api/v1/bboxes/kdf/${kdfId}/job`, { 
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
-          
-          if (!resp.ok) {
-            let errorMessage = `获取KDF边界框失败 (${resp.status})`
-            try {
-              const errorData = await resp.text()
-              console.error('KDF边界框API错误详情:', errorData)
-              if (errorData) {
-                try {
-                  const errorJson = JSON.parse(errorData)
-                  errorMessage = errorJson.message || errorJson.detail || errorMessage
-                } catch {
-                  errorMessage = `获取KDF边界框失败 (${resp.status}): ${errorData.slice(0, 200)}`
-                }
-              }
-            } catch (e) {
-              console.error('解析KDF边界框错误响应失败:', e)
-            }
-            throw new Error(errorMessage)
-          }
-          const data = await resp.json()
-          console.log('KDF边界框请求成功，KDF ID:', kdfId, data)
-          // data: { data: { jobId, blocksByPage } }
-          setLpBlocksByPage(data?.data?.blocksByPage || {})
-        } catch (e) {
-          console.error('获取KDF边界框失败:', e)
-          setLpError(String(e?.message || e))
-        } finally {
-          setLpParsing(false)
-          // 清理处理状态
-          if (currentProcessingFileRef.current === fileId) {
-            currentProcessingFileRef.current = null
-          }
-        }
-      })()
-    } else {
+    if (!pdfFile) {
       setLoading(false)
-      // 清理处理状态
       currentProcessingFileRef.current = null
+      return
     }
-  }, [pdfFile, selectedKdfFile])
+
+    setLoading(true)
+
+    console.log('文件检查 - PDF大小:', pdfFile.size, '类型:', pdfFile.type)
+
+    if (pdfFile.type !== 'application/pdf') {
+      setError('文件类型不是PDF，请选择正确的PDF文件')
+      setLoading(false)
+      return
+    }
+
+    if (pdfFile.size === 0) {
+      setError('文件为空，请选择有效的PDF文件')
+      setLoading(false)
+      return
+    }
+
+    const fileId = `${pdfFile.name}-${pdfFile.size}-${pdfFile.lastModified ?? 'no-last-modified'}`
+
+    if (currentProcessingFileRef.current === fileId) {
+      console.log('文件已在处理中，跳过重复请求')
+      setLoading(false)
+      return
+    }
+
+    currentProcessingFileRef.current = fileId
+
+    ;(async () => {
+      try {
+        setLpParsing(true)
+        setLpError(null)
+        const fd = new FormData()
+        fd.append('files', pdfFile)
+        fd.append('return_content_list', 'true')
+        fd.append('return_md', 'false')
+        fd.append('return_layout', 'false')
+        fd.append('return_middle_json', 'false')
+        fd.append('return_model_output', 'false')
+
+        console.log('发送本地解析请求，文件ID:', fileId)
+        const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}))
+          throw new Error(err?.detail || `后端解析失败(${resp.status})`)
+        }
+        const data = await resp.json()
+        console.log('本地解析请求成功，文件ID:', fileId, data)
+        setLpBlocksByPage(data?.blocksByPage || {})
+      } catch (e) {
+        console.error('本地解析失败:', e)
+        setLpError(String(e?.message || e))
+      } finally {
+        setLpParsing(false)
+        if (currentProcessingFileRef.current === fileId) {
+          currentProcessingFileRef.current = null
+        }
+      }
+    })()
+  }, [pdfFile])
 
   // 当页面改变时重置缩放比例和内容尺寸
   useEffect(() => {
@@ -3511,7 +3335,7 @@ const KDFReader = () => {
         <div style={styles.container} className="interactive-pdf-container">
           {!pdfFile && (
             <div style={styles.noFile}>
-              <p>请先从右侧KDF数据库中选择一个PDF文件</p>
+              <p>请从左侧上传PDF文件</p>
             </div>
           )}
           
@@ -3566,19 +3390,6 @@ const KDFReader = () => {
           {showDebugBounds ? '🔍 隐藏边界' : '🔍 显示边界'}
         </button>
 
-        <button 
-          style={{
-            ...styles.button,
-            backgroundColor: '#17a2b8',
-            fontSize: '12px',
-            padding: '8px 12px'
-          }}
-          onClick={downloadDetectionsJSON}
-          title={'下载检测结果JSON'}
-          disabled={!(lpBlocksByPage && Object.keys(lpBlocksByPage).length) && !(parsedByPage && Object.keys(parsedByPage).length)}
-        >
-          📥 下载JSON
-        </button>
 
         {/* 坐标转换方法选择器 */}
         <select
@@ -3658,7 +3469,6 @@ const KDFReader = () => {
         ...styles.statusBar,
         display: loading || error || !pdfFile ? 'none' : 'flex'
       }}>
-        <span>高亮: {highlights.filter(h => h.pageNumber === pageNumber).length} 个</span>
         <span>附件: {attachments.filter(a => a.pageNumber === pageNumber).length} 个</span>
         <span>关联图片: {associatedImages.filter(img => img.pageNumber === pageNumber).length} 个</span>
         {loadingMultimedias && <span style={{ color: '#007bff' }}>🔄 加载多媒体中...</span>}
@@ -3704,7 +3514,6 @@ const KDFReader = () => {
           <div
             ref={pageWrapperRef}
             style={styles.pageWrapper}
-            onMouseUp={handleTextSelection}
             onContextMenu={handleContextMenu}
           >
             <Document
@@ -3767,23 +3576,6 @@ const KDFReader = () => {
               />
             </Document>
 
-            {/* 渲染高亮区域（放到与页面同层，便于对齐） */}
-            {highlights
-              .filter(highlight => highlight.pageNumber === pageNumber)
-              .map(highlight => (
-                <div
-                  key={highlight.id}
-                  style={{
-                    ...styles.highlight,
-                    left: highlight.area.x,
-                    top: highlight.area.y,
-                    width: highlight.area.width,
-                    height: highlight.area.height
-                  }}
-                  title={`高亮: "${highlight.text}"`}
-                />
-              ))
-            }
 
 
             {/* 视频覆盖块：在原始PDF上覆盖控制图标，点击时才渲染视频 */}
@@ -3874,11 +3666,16 @@ const KDFReader = () => {
                         onLoadedMetadata={() => {
                           const video = videoRefs.current[att.id]
                           if (video) {
+                            // 设置初始播放速度
+                            const playbackRate = videoStates[att.id]?.playbackRate || 1
+                            video.playbackRate = playbackRate
+                            
                             setVideoStates(prev => ({ 
                               ...prev, 
                               [att.id]: { 
                                 ...prev[att.id], 
-                                duration: video.duration || 0
+                                duration: video.duration || 0,
+                                playbackRate: playbackRate
                               } 
                             }))
                           }
@@ -3899,29 +3696,42 @@ const KDFReader = () => {
                       </div>
                     )}
                     
-                    {/* 视频信息标识 */}
-                    {!hasStartedPlaying && (
-                      <div style={{
-                        position: 'absolute',
-                        bottom: 8,
-                        left: 8,
-                        background: 'rgba(0,0,0,0.7)',
-                        color: 'white',
-                        padding: '4px 8px',
-                        borderRadius: 4,
-                        fontSize: '11px',
-                        pointerEvents: 'none', // 确保不阻止点击事件
-                        userSelect: 'none', // 防止文字被选中
-                        zIndex: 50001 // 确保文件标识在最上层
-                      }}>
-                        📹 {att.fileName}
-                      </div>
-                    )}
                   </div>
                 )
               })}
 
-            {/* 视频进度条 - 独立渲染在视频容器外部 */}
+            {/* 视频文件名标识 - 独立渲染在视频容器外部 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+              .map(att => {
+                const hasStartedPlaying = videoStates[att.id]?.hasStarted
+                if (hasStartedPlaying) return null // 播放时不显示文件名
+                
+                return (
+                  <div
+                    key={`video_filename_${att.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: att.area.x,
+                      top: att.area.y - 25, // 在bbox上方显示
+                      background: 'rgba(0,0,0,0.8)',
+                      color: 'white',
+                      padding: '4px 8px',
+                      borderRadius: 4,
+                      fontSize: '11px',
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                      zIndex: 1000,
+                      maxWidth: att.area.width,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    📹 {att.fileName}
+                  </div>
+                )
+              })}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
               .map(att => (
@@ -3931,6 +3741,9 @@ const KDFReader = () => {
                   videoStates={videoStates}
                   handleVideoProgressChange={handleVideoProgressChange}
                   formatTime={formatTime}
+                  onPlayPause={handleVideoPlayPause}
+                  onSpeedChange={handleVideoSpeedChange}
+                  onFullscreen={handleVideoFullscreen}
                 />
               ))}
 
@@ -4091,29 +3904,42 @@ const KDFReader = () => {
                       </div>
                     )}
                     
-                    {/* 音频信息标识 */}
-                    {!hasStartedPlaying && (
-                      <div style={{
-                        position: 'absolute',
-                        bottom: 8,
-                        left: 8,
-                        background: 'rgba(0,0,0,0.7)',
-                        color: 'white',
-                        padding: '4px 8px',
-                        borderRadius: 4,
-                        fontSize: '11px',
-                        pointerEvents: 'none', // 确保不阻止点击事件
-                        userSelect: 'none', // 防止文字被选中
-                        zIndex: 50001 // 确保文件标识在最上层
-                      }}>
-                        🎵 {att.fileName}
-                      </div>
-                    )}
                   </div>
                 )
               })}
 
-            {/* 音频进度条 - 独立渲染在音频容器外部 */}
+            {/* 音频文件名标识 - 独立渲染在音频容器外部 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
+              .map(att => {
+                const hasStartedPlaying = audioStates[att.id]?.hasStarted
+                if (hasStartedPlaying) return null // 播放时不显示文件名
+                
+                return (
+                  <div
+                    key={`audio_filename_${att.id}`}
+                    style={{
+                      position: 'absolute',
+                      left: att.area.x,
+                      top: att.area.y - 25, // 在bbox上方显示
+                      background: 'rgba(0,0,0,0.8)',
+                      color: 'white',
+                      padding: '4px 8px',
+                      borderRadius: 4,
+                      fontSize: '11px',
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                      zIndex: 1000,
+                      maxWidth: att.area.width,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    🎵 {att.fileName}
+                  </div>
+                )
+              })}
             {attachments
               .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
               .map(att => (
@@ -4124,6 +3950,34 @@ const KDFReader = () => {
                   handleAudioProgressChange={handleAudioProgressChange}
                   formatTime={formatTime}
                 />
+              ))}
+
+            {/* 图片文件名标识 - 独立渲染在图片容器外部 */}
+            {attachments
+              .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
+              .map(att => (
+                <div
+                  key={`image_filename_${att.id}`}
+                  style={{
+                    position: 'absolute',
+                    left: att.area.x,
+                    top: att.area.y - 25, // 在bbox上方显示
+                    background: 'rgba(0,0,0,0.8)',
+                    color: 'white',
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    fontSize: '11px',
+                    pointerEvents: 'none',
+                    userSelect: 'none',
+                    zIndex: 1000,
+                    maxWidth: att.area.width,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  🖼️ {att.fileName}
+                </div>
               ))}
 
             {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
@@ -4360,9 +4214,7 @@ const KDFReader = () => {
           {(() => {
             const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
             let matched = null
-            if (selectedArea && selectedText) {
-              matched = matchVisualAnnotation(selectedArea) || matchAnnotation(selectedArea)
-            } else if (wrapperRect) {
+            if (wrapperRect) {
               matched = matchVisualAnnotation({ px: contextMenuPos.x - wrapperRect.left, py: contextMenuPos.y - wrapperRect.top })
             }
             if (matched) {
@@ -4377,29 +4229,6 @@ const KDFReader = () => {
         </div>
       )}
 
-      {/* 高亮确认气泡 */}
-      {showHighlightConfirm && (
-        <div
-          style={{
-            position: 'fixed',
-            left: highlightConfirmPos.x,
-            top: highlightConfirmPos.y,
-            background: '#ffffff',
-            border: '1px solid #e9ecef',
-            borderRadius: 6,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            padding: '8px 10px',
-            zIndex: 1000,
-            display: 'flex',
-            gap: 8,
-            alignItems: 'center'
-          }}
-        >
-          <span style={{ fontSize: 13, color: '#333' }}>高亮选中内容？</span>
-          <button style={styles.button} onClick={confirmHighlight}>高亮</button>
-          <button style={{ ...styles.button, backgroundColor: '#6c757d' }} onClick={cancelHighlight}>取消</button>
-        </div>
-      )}
 
       {/* 隐藏的文件输入 */}
       <input
@@ -4485,22 +4314,6 @@ const KDFReader = () => {
         </div>
       </div>
 
-      {/* 右侧：KDF文件选择器 */}
-      <div style={{ 
-        width: '350px', 
-        backgroundColor: '#f8f9fa', 
-        borderLeft: '1px solid #dee2e6',
-        overflowY: 'auto',
-        padding: '20px',
-        boxSizing: 'border-box'
-      }}>
-        <KDFFileSelector 
-          onFileSelect={handleKdfFileSelect}
-          selectedFile={selectedKdfFile}
-          kdfFiles={kdfFiles}
-          loading={kdfLoading}
-        />
-      </div>
     </div>
   )
 }
@@ -4596,10 +4409,17 @@ const styles = {
   pageWrapper: {
     position: 'relative'
   },
-  highlight: {
+  associatedImage: {
     position: 'absolute',
-    border: '2px solid #66a3ff',
-    backgroundColor: 'transparent',
+    width: '24px',
+    height: '24px',
+    backgroundColor: '#28a745',
+    color: 'white',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '12px',
     cursor: 'pointer',
     pointerEvents: 'auto',
     zIndex: 10

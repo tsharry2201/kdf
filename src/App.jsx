@@ -118,9 +118,9 @@ function App() {
       <div className="main-content">
         {/* KDF数据库和阅读器标签独立显示，不需要文件上传 */}
         {activeTab === 'kdf' ? (
-          <KDFViewer />
+          <KDFViewer file={pdfFile} />
         ) : activeTab === 'reader' ? (
-          <KDFReader />
+          <KDFReader file={pdfFile} />
         ) : !pdfFile ? (
           <div className="empty-state">
             <div className="empty-icon">📁</div>
