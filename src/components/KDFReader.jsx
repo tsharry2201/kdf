@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Document, Page, pdfjs } from 'react-pdf'
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
+import { Document, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
+import { PDFPageView, projectBBoxToRenderRect, SCALE_BASE } from './pdf/BBoxOverlay'
 // CSS样式已在App.css中定义
 
 // 上传文件组件
@@ -113,7 +114,8 @@ const VideoProgressBar = ({
         padding: '8px',
         zIndex: 1000,
         border: '1px solid rgba(255,255,255,0.2)',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+        boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+        pointerEvents: 'auto'
       }}
     >
       {/* 进度条 */}
@@ -218,7 +220,7 @@ const AudioProgressBar = ({
   attachment, 
   audioStates, 
   handleAudioProgressChange, 
-  formatTime 
+  formatTime
 }) => {
   const hasStartedPlaying = audioStates[attachment.id]?.hasStarted
   const duration = audioStates[attachment.id]?.duration
@@ -237,7 +239,8 @@ const AudioProgressBar = ({
         padding: '8px',
         zIndex: 1000,
         border: '1px solid rgba(255,255,255,0.2)',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+        boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+        pointerEvents: 'auto'
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -318,6 +321,45 @@ const adjustRectWithTuning = (rect, tuning) => {
     width: finalWidth,
     height: finalHeight
   }
+}
+
+const normalizeBlocksByPage = (raw) => {
+  if (!raw) return {}
+
+  const coerceBlocks = (blocks) => {
+    if (!Array.isArray(blocks)) return []
+    return blocks.map((block) => ({
+      ...block,
+      bbox: Array.isArray(block?.bbox) ? block.bbox : []
+    }))
+  }
+
+  const result = {}
+
+  if (Array.isArray(raw)) {
+    raw.forEach((block) => {
+      if (!block) return
+      const pageKey = String(block.page ?? block.pageNumber ?? block.page_id ?? block.pageId ?? 1)
+      if (!result[pageKey]) {
+        result[pageKey] = []
+      }
+      result[pageKey].push({
+        ...block,
+        bbox: Array.isArray(block?.bbox) ? block.bbox : []
+      })
+    })
+    return result
+  }
+
+  Object.entries(raw).forEach(([pageId, blocks]) => {
+    const key = String(pageId)
+    const list = coerceBlocks(blocks)
+    if (list.length > 0) {
+      result[key] = list
+    }
+  })
+
+  return result
 }
 
 const pickSizeFromBlocks = (blocks, field) => {
@@ -486,6 +528,7 @@ const KDFReader = ({ file }) => {
   const [manualOffset, setManualOffset] = useState({ x: -2, y: -1 }) // 手动调整偏移
   const [usePageScale, setUsePageScale] = useState(true) // 是否使用pageScale
   const [contentDimensions, setContentDimensions] = useState({ width: 'auto', height: 'auto' }) // 内容实际尺寸
+  const [pageRenderSizes, setPageRenderSizes] = useState({}) // { [pageNumber]: { width, height, scale } }
   const [videoStates, setVideoStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number, playbackRate: number, isFullscreen: boolean } }
   const videoRefs = useRef({}) // 保持每个视频的ref
   const [audioStates, setAudioStates] = useState({}) // { [attachmentId]: { playing: boolean, hasStarted: boolean, currentTime: number, duration: number } }
@@ -508,10 +551,15 @@ const KDFReader = ({ file }) => {
     anchorY: 0,
     useAbsWidth: false,
     useAbsHeight: false,
-    absWidth: null,
-    absHeight: null
-  })
+  absWidth: null,
+  absHeight: null
+})
   const attachmentsRef = useRef([])
+  const renderMetricsRef = useRef({})
+  const layoutJsonInputRef = useRef(null)
+
+  const [manualLayout, setManualLayout] = useState(null)
+  const [layoutSource, setLayoutSource] = useState(null)
 
   const pageRef = useRef(null) // 保留：外层容器
   const pageWrapperRef = useRef(null) // 新增：实际页面包裹层（与高亮同层）
@@ -523,6 +571,60 @@ const KDFReader = ({ file }) => {
     verbosity: 0,
     enableXfa: true
   }), [])
+
+  const pageKey = String(pageNumber)
+  const rawLayoutBlocks = lpBlocksByPage && (lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber])
+  const overlayBlocks = Array.isArray(rawLayoutBlocks) ? rawLayoutBlocks : []
+  const overlayMetrics = renderMetricsRef.current[pageNumber]
+    || (typeof contentDimensions.width === 'number' && typeof contentDimensions.height === 'number'
+      ? {
+          renderWidth: contentDimensions.width,
+          renderHeight: contentDimensions.height,
+          offsetX: 0,
+          offsetY: 0
+        }
+      : null)
+
+  const handlePageViewportReady = (targetPageNumber, viewportInfo) => {
+    if (!viewportInfo || !viewportInfo.originalWidth || !viewportInfo.originalHeight) return
+
+    const { originalWidth, originalHeight } = viewportInfo
+    const availableWidth = window.innerWidth - 60
+    const availableHeight = window.innerHeight - 160
+    const widthScale = availableWidth / originalWidth
+    const heightScale = availableHeight / originalHeight
+    const optimalScale = Math.min(widthScale, heightScale, 1.6)
+    const finalScale = Math.min(Math.max(optimalScale * 1.3, 0.5), 1.8)
+    const actualWidth = Math.round(originalWidth * finalScale)
+    const actualHeight = Math.round(originalHeight * finalScale)
+
+    setPageRenderSizes(prev => {
+      const prevSize = prev[targetPageNumber]
+      if (prevSize && prevSize.width === actualWidth && prevSize.height === actualHeight) {
+        return prev
+      }
+      return { ...prev, [targetPageNumber]: { width: actualWidth, height: actualHeight, scale: finalScale } }
+    })
+
+    setBasePageSize(prev => ({ ...prev, [targetPageNumber]: { width: originalWidth, height: originalHeight } }))
+
+    renderMetricsRef.current[targetPageNumber] = {
+      renderWidth: actualWidth,
+      renderHeight: actualHeight,
+      offsetX: 0,
+      offsetY: 0
+    }
+
+    if (targetPageNumber === pageNumber) {
+      setPageScale(prev => (Math.abs(prev - finalScale) > 0.0001 ? finalScale : prev))
+      setContentDimensions(prev => {
+        if (prev?.width === actualWidth && prev?.height === actualHeight) {
+          return prev
+        }
+        return { width: actualWidth, height: actualHeight }
+      })
+    }
+  }
 
   const onDocumentLoadSuccess = (pdf) => {
     console.log('交互式编辑器PDF加载成功，页数:', pdf?.numPages)
@@ -1019,52 +1121,31 @@ const KDFReader = ({ file }) => {
           let convertedArea = { x: 0, y: 0, width: 200, height: 150 } // 默认尺寸
           
           if (bboxInfo && bboxInfo.bbox && Array.isArray(bboxInfo.bbox) && bboxInfo.bbox.length >= 4) {
-            // 使用与主坐标转换逻辑相同的参数
-            // 这些参数应该与parsedByPage中使用的参数保持一致
-            const sX = 0.86  // 与主逻辑保持一致
-            const sY = 0.86  // 与主逻辑保持一致
-            
-            // 获取页面偏移量 - 需要从当前页面元素获取
-            let offsetX = 0, offsetY = 0
-            
-            // 尝试从页面元素获取偏移量
-            const pageElement = pageWrapperRef.current?.querySelector(`[data-page-number="${pageNumber}"]`)
-            if (pageElement) {
-              const pageRect = pageElement.getBoundingClientRect()
-              const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
-              if (pageRect && wrapperRect) {
-                offsetX = pageRect.left - wrapperRect.left
-                offsetY = pageRect.top - wrapperRect.top
+            const metrics = renderMetricsRef.current[pageNumber]
+            const baseRect = projectBBoxToRenderRect(bboxInfo.bbox, metrics)
+
+            if (baseRect) {
+              const scaledPosition = adjustRectWithTuning(baseRect, bboxTuning)
+
+              convertedArea = {
+                x: Math.round(scaledPosition.x),
+                y: Math.round(scaledPosition.y),
+                width: Math.round(scaledPosition.width),
+                height: Math.round(scaledPosition.height)
               }
+
+              console.log('坐标转换:', {
+                originalBbox: bboxInfo.bbox,
+                convertedArea,
+                metrics
+              })
+            } else {
+              console.warn('无法根据当前渲染指标转换bbox:', {
+                pageNumber,
+                bbox: bboxInfo.bbox,
+                metrics
+              })
             }
-            
-            // PDF坐标 [x1, y1, x2, y2] 转换为页面像素坐标
-            const x1 = bboxInfo.bbox[0] // Xmin
-            const y1 = bboxInfo.bbox[1] // Ymin
-            const x2 = bboxInfo.bbox[2] // Xmax
-            const y2 = bboxInfo.bbox[3] // Ymax
-            
-            const pxX = offsetX + x1 * sX
-            const pxY = offsetY + y1 * sY
-            const pxW = Math.max(1, (x2 - x1) * sX)
-            const pxH = Math.max(1, (y2 - y1) * sY)
-            
-            // 应用bbox调整参数
-            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
-            
-            convertedArea = {
-              x: Math.round(scaledPosition.x),
-              y: Math.round(scaledPosition.y),
-              width: Math.round(scaledPosition.width),
-              height: Math.round(scaledPosition.height)
-            }
-            
-            console.log('坐标转换:', {
-              originalBbox: bboxInfo.bbox,
-              convertedArea: convertedArea,
-              scale: { x: sX, y: sY },
-              offset: { x: offsetX, y: offsetY }
-            })
           }
           
           // 创建附件对象
@@ -1261,7 +1342,7 @@ const KDFReader = ({ file }) => {
   const clearAllMultimedias = () => {
     const unsavedAttachments = attachments.filter(att => !att.saved && !att.loaded)
     const savedAttachments = attachments.filter(att => att.saved || att.loaded)
-    
+
     if (unsavedAttachments.length === 0) {
       alert('没有要清除的未保存多媒体文件')
       return
@@ -1281,6 +1362,88 @@ const KDFReader = ({ file }) => {
     }
   }
 
+  const updateLayoutBlocks = (blocksByPage, source) => {
+    setLpBlocksByPage(blocksByPage ? { ...blocksByPage } : null)
+    setLayoutSource(source)
+  }
+
+  const handleLayoutJsonUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw)
+      const normalized = normalizeBlocksByPage(parsed?.blocksByPage ?? parsed)
+
+      if (Object.keys(normalized).length === 0) {
+        throw new Error('JSON 中未找到有效的 blocksByPage 数据')
+      }
+
+      setManualLayout({
+        jobId: parsed?.jobId || '',
+        fileName: file.name,
+        blocksByPage: normalized
+      })
+
+      updateLayoutBlocks(normalized, 'manual')
+      setLpError(null)
+    } catch (error) {
+      console.error('解析布局JSON失败:', error)
+      setLpError(`解析布局JSON失败: ${error?.message || error}`)
+    } finally {
+      if (event.target) {
+        event.target.value = ''
+      }
+    }
+  }
+
+  const handleLocalParse = async () => {
+    if (!pdfFile || lpParsing) return
+
+    try {
+      setLpParsing(true)
+      setLpError(null)
+
+      const fd = new FormData()
+      fd.append('files', pdfFile)
+      fd.append('return_content_list', 'true')
+      fd.append('return_md', 'false')
+      fd.append('return_layout', 'false')
+      fd.append('return_middle_json', 'false')
+      fd.append('return_model_output', 'false')
+
+      console.log('发送本地解析请求:', pdfFile?.name)
+      const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
+
+      if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({}))
+        throw new Error(errBody?.detail || `后端解析失败(${resp.status})`)
+      }
+
+      const data = await resp.json()
+      const normalized = normalizeBlocksByPage(data?.blocksByPage ?? data)
+
+      if (Object.keys(normalized).length === 0) {
+        throw new Error('解析结果为空')
+      }
+
+      console.log('本地解析成功:', { source: 'api', blocksByPage: normalized })
+      updateLayoutBlocks(normalized, 'api')
+      setLpError(null)
+    } catch (error) {
+      console.error('本地解析失败:', error)
+      setLpError(`本地解析失败: ${error?.message || error}`)
+
+      if (manualLayout?.blocksByPage) {
+        console.log('使用手动JSON作为回退结果')
+        updateLayoutBlocks(manualLayout.blocksByPage, 'manual-fallback')
+      }
+    } finally {
+      setLpParsing(false)
+    }
+  }
+
 
   // 处理操作菜单点击函数已移除，现在使用直接的显示/隐藏按钮
 
@@ -1297,10 +1460,7 @@ const KDFReader = ({ file }) => {
     }
   }, [showContextMenu, showFileTypeMenu])
 
-  // 用于跟踪当前处理的文件，避免重复请求
-  const currentProcessingFileRef = useRef(null)
-
-      useEffect(() => {
+  useEffect(() => {
     console.log('KDF Reader useEffect触发，文件:', pdfFile?.name)
     setError(null)
     setPageNumber(1)
@@ -1309,13 +1469,15 @@ const KDFReader = ({ file }) => {
     setAttachments([])
     setAssociatedImages([]) // 重置关联图片
     setParsedByPage({})
+    setPageRenderSizes({})
     setLpBlocksByPage(null)
     setLpParsing(false)
     setLpError(null)
+    setManualLayout(null)
+    setLayoutSource(null)
 
     if (!pdfFile) {
       setLoading(false)
-      currentProcessingFileRef.current = null
       return
     }
 
@@ -1334,49 +1496,6 @@ const KDFReader = ({ file }) => {
       setLoading(false)
       return
     }
-
-    const fileId = `${pdfFile.name}-${pdfFile.size}-${pdfFile.lastModified ?? 'no-last-modified'}`
-
-    if (currentProcessingFileRef.current === fileId) {
-      console.log('文件已在处理中，跳过重复请求')
-      setLoading(false)
-      return
-    }
-
-    currentProcessingFileRef.current = fileId
-
-    ;(async () => {
-      try {
-        setLpParsing(true)
-        setLpError(null)
-        const fd = new FormData()
-        fd.append('files', pdfFile)
-        fd.append('return_content_list', 'true')
-        fd.append('return_md', 'false')
-        fd.append('return_layout', 'false')
-        fd.append('return_middle_json', 'false')
-        fd.append('return_model_output', 'false')
-
-        console.log('发送本地解析请求，文件ID:', fileId)
-        const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
-
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}))
-          throw new Error(err?.detail || `后端解析失败(${resp.status})`)
-        }
-        const data = await resp.json()
-        console.log('本地解析请求成功，文件ID:', fileId, data)
-        setLpBlocksByPage(data?.blocksByPage || {})
-      } catch (e) {
-        console.error('本地解析失败:', e)
-        setLpError(String(e?.message || e))
-      } finally {
-        setLpParsing(false)
-        if (currentProcessingFileRef.current === fileId) {
-          currentProcessingFileRef.current = null
-        }
-      }
-    })()
   }, [pdfFile])
 
   // 当页面改变时重置缩放比例和内容尺寸
@@ -1560,30 +1679,22 @@ const KDFReader = ({ file }) => {
 
           const targetWidth = Math.max(1, pdfRenderWidth)
           const targetHeight = Math.max(1, pdfRenderHeight)
-          const sourceInfo = resolveSourceSize({
-            blocks: lpBlocks,
-            viewport,
-            method: coordinateMethod
-          })
 
-          let sX = targetWidth / Math.max(1, sourceInfo.width)
-          let sY = targetHeight / Math.max(1, sourceInfo.height)
-
-          if (sourceInfo.basis === 'bbox_extents') {
-            const ratio = Math.max(sX, sY) / Math.max(1e-6, Math.min(sX, sY))
-            if (ratio > 1.2) {
-              const uniformScale = Math.min(sX, sY)
-              console.log('bbox尺度差异过大，采用统一缩放', { sX, sY, uniformScale, sourceInfo, targetSize: { width: targetWidth, height: targetHeight } })
-              sX = uniformScale
-              sY = uniformScale
-            }
+          const metrics = {
+            offsetX,
+            offsetY,
+            renderWidth: targetWidth,
+            renderHeight: targetHeight
           }
-          sX = sY = 0.86
+          renderMetricsRef.current[pageNumber] = metrics
+
           console.log('坐标转换准备:', {
             pageNumber,
-            source: sourceInfo,
             targetSize: { width: targetWidth, height: targetHeight },
-            scale: { x: sX, y: sY },
+            scale: {
+              x: metrics.renderWidth / SCALE_BASE,
+              y: metrics.renderHeight / SCALE_BASE
+            },
             offset: { x: offsetX, y: offsetY }
           })
 
@@ -1595,22 +1706,23 @@ const KDFReader = ({ file }) => {
           }
 
           const annsRaw = (lpBlocks || []).map((b, idx) => {
-            const [x1, y1, x2, y2] = b.bbox || [0, 0, 0, 0]
-            const dx = (x2 - x1)
-            const dy = (y2 - y1)
-            // 坐标转换：bbox -> PDF渲染坐标
-            // 直接映射到PDF页面的渲染坐标系统
-            const pxX = offsetX + x1 * sX
-            const pxY = offsetY + y1 * sY
-            const pxW = Math.max(1, dx * sX)
-            const pxH = Math.max(1, dy * sY)
-            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
+            const baseRect = projectBBoxToRenderRect(b.bbox, metrics)
+            if (!baseRect) {
+              if (idx < 3) {
+                console.log(`框 ${idx + 1} 无法转换:`, { originalBbox: b.bbox })
+              }
+              return null
+            }
 
-            // 调试信息：显示前几个框的坐标转换过程
+            const scaledPosition = adjustRectWithTuning(baseRect, bboxTuning)
+
             if (idx < 3) {
               console.log(`框 ${idx + 1} 坐标转换:`, {
-                originalBbox: [x1, y1, x2, y2],
-                scale: { x: sX, y: sY },
+                originalBbox: b.bbox,
+                scale: {
+                  x: metrics.renderWidth / SCALE_BASE,
+                  y: metrics.renderHeight / SCALE_BASE
+                },
                 offset: { x: offsetX, y: offsetY },
                 finalPosition: {
                   x: Math.round(scaledPosition.x),
@@ -1618,7 +1730,7 @@ const KDFReader = ({ file }) => {
                   width: Math.round(scaledPosition.width),
                   height: Math.round(scaledPosition.height)
                 },
-                note: 'bbox -> PDF渲染坐标 (直接映射)'
+                note: 'bbox -> PDF渲染坐标 (归一化转换)'
               })
             }
 
@@ -1636,7 +1748,7 @@ const KDFReader = ({ file }) => {
             }
           })
 
-          const anns = annsRaw.filter(a => !a.id.startsWith('text'))
+          const anns = annsRaw.filter(Boolean).filter(a => !a.id.startsWith('text'))
 
           console.log('边界框渲染结果:', {
             pageNumber,
@@ -3412,6 +3524,38 @@ const KDFReader = ({ file }) => {
           <option value="dpi">bbox推断</option>
         </select>
 
+        <button
+          style={{
+            ...styles.button,
+            backgroundColor: '#007bff',
+            color: 'white',
+            marginLeft: '8px'
+          }}
+          onClick={handleLocalParse}
+          disabled={lpParsing || !pdfFile}
+        >
+          {lpParsing ? '解析中…' : '⚙️ 本地解析'}
+        </button>
+
+        <button
+          style={{
+            ...styles.button,
+            backgroundColor: '#6f42c1',
+            color: 'white',
+            marginLeft: '8px'
+          }}
+          onClick={() => layoutJsonInputRef.current?.click()}
+        >
+          📥 上传布局JSON
+        </button>
+        <input
+          ref={layoutJsonInputRef}
+          type="file"
+          accept="application/json"
+          style={{ display: 'none' }}
+          onChange={handleLayoutJsonUpload}
+        />
+
         {/* 手动调整偏移 (隐藏) */}
         <div style={{ display: 'none' }} />
 
@@ -3472,6 +3616,21 @@ const KDFReader = ({ file }) => {
         <span>附件: {attachments.filter(a => a.pageNumber === pageNumber).length} 个</span>
         <span>关联图片: {associatedImages.filter(img => img.pageNumber === pageNumber).length} 个</span>
         {loadingMultimedias && <span style={{ color: '#007bff' }}>🔄 加载多媒体中...</span>}
+        {layoutSource && (
+          <span style={{ color: layoutSource.startsWith('manual') ? '#17a2b8' : '#28a745' }}>
+            {(() => {
+              const manualInfo = manualLayout ? [manualLayout.fileName, manualLayout.jobId].filter(Boolean).join(' / ') : ''
+              if (layoutSource === 'api') return '解析来源: 本地接口'
+              if (layoutSource === 'manual') {
+                return `解析来源: 手动JSON${manualInfo ? `（${manualInfo}）` : ''}`
+              }
+              return `解析来源: 手动JSON回退${manualInfo ? `（${manualInfo}）` : ''}`
+            })()}
+          </span>
+        )}
+        {lpError && (
+          <span style={{ color: '#dc3545' }}>解析失败: {lpError}</span>
+        )}
       </div>
 
       {/* PDF页面容器 - 使用CropBox尺寸，限制画布范围 */}
@@ -3481,7 +3640,6 @@ const KDFReader = ({ file }) => {
         margin: '0 auto',
         maxWidth: '100%',
         boxSizing: 'border-box',
-        // 设置最大高度，允许滚动但限制画布范围
         maxHeight: 'calc(100vh - 200px)',
         overflow: 'auto'
       }}>
@@ -3493,9 +3651,7 @@ const KDFReader = ({ file }) => {
             WebkitUserSelect: 'text',
             MozUserSelect: 'text',
             msUserSelect: 'text',
-            // 仅根据宽度自适应，避免人为固定高度导致底部留白
             width: contentDimensions.width === 'auto' ? 'auto' : `${contentDimensions.width}px`,
-            // 不固定高度/最小高度，让容器以内容真实高度为准
             maxWidth: '100%',
             margin: '0 auto',
             overflow: 'visible',
@@ -3504,667 +3660,651 @@ const KDFReader = ({ file }) => {
         ref={pageRef}
         onClick={(e) => {
           console.log('PDF容器点击事件')
-          // 点击其他地方关闭菜单
           if (showContextMenu) {
             setShowContextMenu(false)
           }
         }}
       >
         <div className="interactive-pdf-content">
-          <div
-            ref={pageWrapperRef}
-            style={styles.pageWrapper}
-            onContextMenu={handleContextMenu}
+          <Document
+            file={pdfFile}
+            onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={onDocumentLoadError}
+            options={documentOptions}
           >
-            <Document
-              file={pdfFile}
-              onLoadSuccess={onDocumentLoadSuccess}
-              onLoadError={onDocumentLoadError}
-              options={documentOptions}
-            >
-              <Page
-                pageNumber={pageNumber}
-                renderTextLayer={true}
-                renderAnnotationLayer={true}
-                scale={pageScale}
-                // 关键：使用CropBox而不是MediaBox
-                useCropBox={true}
-                onLoadSuccess={(page) => {
-                  console.log('页面渲染成功', page)
-                  
-                  // 步骤2：在渲染时，强制使用CropBox尺寸，避免高度被MediaBox拉大造成底部留白
-                  const viewport = page.getViewport({ scale: 1.0, useCropBox: true })
-                  
-                  // 由于useCropBox=true，viewport已经是基于CropBox的尺寸
-                  const pdfWidth = viewport.width
-                  const pdfHeight = viewport.height
-                  
-                  console.log('PDF页面尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
-                  
-                  // 计算适合屏幕的缩放比例（稍微放大一点）
-                  const availableWidth = window.innerWidth - 60
-                  const availableHeight = window.innerHeight - 160
-                  const widthScale = availableWidth / pdfWidth
-                  const heightScale = availableHeight / pdfHeight
-                  
-                  // 选择较小的缩放比例，确保页面完全可见，同时整体放大1.5倍
-                  // 略微缩小整体显示比例
-                  const optimalScale = Math.min(widthScale, heightScale, 1.6)
-                  const finalScale = Math.min(Math.max(optimalScale * 1.3, 0.5), 1.8)
-                  
-                  console.log('PDF内容尺寸 (基于CropBox):', pdfWidth, 'x', pdfHeight)
-                  console.log('最终缩放比例:', finalScale)
-                  
-                  // 计算实际内容尺寸（基于CropBox和缩放比例）
-                  const actualWidth = Math.round(pdfWidth * finalScale)
-                  const actualHeight = Math.round(pdfHeight * finalScale)
-                  
-                  console.log('实际显示尺寸 (基于CropBox):', actualWidth, 'x', actualHeight)
-                  
-                  setPageScale(finalScale)
-                  setContentDimensions({
-                    width: actualWidth,
-                    height: actualHeight
-                  })
-                }}
-                onLoadError={(error) => {
-                  console.error('页面渲染失败:', error)
-                  setError('页面渲染失败: ' + error.message)
-                  setLoading(false)
-                }}
-                className="interactive-page"
-              />
-            </Document>
-
-
-
-            {/* 视频覆盖块：在原始PDF上覆盖控制图标，点击时才渲染视频 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
-              .map(att => {
-                const area = att.area
-                const isPlaying = videoStates[att.id]?.playing
-                const hasStartedPlaying = videoStates[att.id]?.hasStarted
-                return (
-                  <div
-                    key={`video_${att.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: area.x,
-                      top: area.y,
-                      width: area.width,
-                      height: area.height,
-                      zIndex: 10010, // 高于hover_region，确保可以接收点击事件
-                      overflow: 'hidden',
-                      borderRadius: hasStartedPlaying ? 4 : 0,
-                      boxShadow: 'none', // 移除阴影效果
-                      // 初始状态：透明背景，让原始PDF内容显示
-                      background: hasStartedPlaying ? '#000' : 'transparent',
-                      cursor: 'pointer' // 添加指针样式
-                    }}
-                    onClick={(e) => { 
-                      e.stopPropagation(); 
-                      console.log('视频点击事件触发', { hasStartedPlaying, attId: att.id })
-                      
-                      if (!hasStartedPlaying) {
-                        // 首次点击，开始播放视频
-                        console.log('开始播放视频')
-                        setVideoStates(prev => ({ 
-                          ...prev, 
-                          [att.id]: { playing: true, hasStarted: true } 
-                        }))
-                        // 延迟一点让video元素先渲染
-                        setTimeout(() => {
-                          const videoEl = videoRefs.current[att.id]
-                          console.log('尝试播放视频元素', videoEl)
-                          if (videoEl) {
-                            videoEl.play().then(() => {
-                              console.log('视频播放成功')
-                            }).catch(e => {
-                              console.error('视频播放失败:', e)
-                            })
-                          }
-                        }, 100)
-                      } else {
-                        // 后续点击，切换播放/暂停
-                        console.log('切换播放状态')
-                        toggleVideoPlay(att.id)
-                      }
-                    }}
-                    title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
-                  >
-                    
-                    {/* 只有开始播放后才渲染视频元素 */}
-                    {hasStartedPlaying && (
-                      <video
-                        ref={el => { if (el) videoRefs.current[att.id] = el }}
-                        src={att.videoUrl}
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover',
-                          display: 'block'
-                        }}
-                        muted
-                        playsInline
-                        onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: true } }))}
-                        onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
-                        onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
-                        onTimeUpdate={() => {
-                          const video = videoRefs.current[att.id]
-                          if (video) {
-                            setVideoStates(prev => ({ 
-                              ...prev, 
-                              [att.id]: { 
-                                ...prev[att.id], 
-                                currentTime: video.currentTime,
-                                duration: video.duration || prev[att.id]?.duration || 0
-                              } 
-                            }))
-                          }
-                        }}
-                        onLoadedMetadata={() => {
-                          const video = videoRefs.current[att.id]
-                          if (video) {
-                            // 设置初始播放速度
-                            const playbackRate = videoStates[att.id]?.playbackRate || 1
-                            video.playbackRate = playbackRate
-                            
-                            setVideoStates(prev => ({ 
-                              ...prev, 
-                              [att.id]: { 
-                                ...prev[att.id], 
-                                duration: video.duration || 0,
-                                playbackRate: playbackRate
-                              } 
-                            }))
-                          }
-                        }}
-                      />
-                    )}
-                    
-                    {/* 播放按钮覆盖层 */}
-                    {(!hasStartedPlaying || !isPlaying) && (
-                      <div 
-                        style={{
-                          ...styles.videoPlayOverlay,
-                          pointerEvents: 'none', // 让点击事件穿透到父容器
-                          zIndex: 50000 // 确保播放按钮在最上层
-                        }}
-                      >
-                        ▶
-                      </div>
-                    )}
-                    
-                  </div>
-                )
-              })}
-
-            {/* 视频文件名标识 - 独立渲染在视频容器外部 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
-              .map(att => {
-                const hasStartedPlaying = videoStates[att.id]?.hasStarted
-                if (hasStartedPlaying) return null // 播放时不显示文件名
-                
-                return (
-                  <div
-                    key={`video_filename_${att.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: att.area.x,
-                      top: att.area.y - 25, // 在bbox上方显示
-                      background: 'rgba(0,0,0,0.8)',
-                      color: 'white',
-                      padding: '4px 8px',
-                      borderRadius: 4,
-                      fontSize: '11px',
-                      pointerEvents: 'none',
-                      userSelect: 'none',
-                      zIndex: 1000,
-                      maxWidth: att.area.width,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    📹 {att.fileName}
-                  </div>
-                )
-              })}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
-              .map(att => (
-                <VideoProgressBar
-                  key={`video_progress_${att.id}`}
-                  attachment={att}
-                  videoStates={videoStates}
-                  handleVideoProgressChange={handleVideoProgressChange}
-                  formatTime={formatTime}
-                  onPlayPause={handleVideoPlayPause}
-                  onSpeedChange={handleVideoSpeedChange}
-                  onFullscreen={handleVideoFullscreen}
-                />
-              ))}
-
-            {/* 音频覆盖块：完全复制视频的处理逻辑 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
-              .map(att => {
-                const area = att.area
-                const isPlaying = audioStates[att.id]?.playing
-                const hasStartedPlaying = audioStates[att.id]?.hasStarted
-                return (
-                  <div
-                    key={`audio_${att.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: area.x,
-                      top: area.y,
-                      width: area.width,
-                      height: area.height,
-                      zIndex: 10010, // 高于hover_region，确保可以接收点击事件
-                      overflow: 'hidden',
-                      borderRadius: hasStartedPlaying ? 4 : 0,
-                      boxShadow: 'none', // 移除阴影效果
-                      // 初始状态：透明背景，让原始PDF内容显示
-                      background: hasStartedPlaying ? 'rgba(0, 123, 255, 0.1)' : 'transparent',
-                      cursor: 'pointer' // 添加指针样式
-                    }}
-                    onClick={(e) => { 
-                      e.stopPropagation(); 
-                      console.log('音频点击事件触发', { hasStartedPlaying, attId: att.id })
-                      
-                      if (!hasStartedPlaying) {
-                        // 首次点击，开始播放音频
-                        console.log('开始播放音频')
-                        setAudioStates(prev => ({ 
-                          ...prev, 
-                          [att.id]: { playing: true, hasStarted: true } 
-                        }))
-                        // 延迟一点让audio元素先渲染
-                        setTimeout(() => {
-                          const audioEl = audioRefs.current[att.id]
-                          console.log('尝试播放音频元素', audioEl)
-                          if (audioEl) {
-                            audioEl.play().then(() => {
-                              console.log('音频播放成功')
-                            }).catch(e => {
-                              console.error('音频播放失败:', e)
-                            })
-                          }
-                        }, 100)
-                      } else {
-                        // 后续点击，切换播放/暂停
-                        console.log('切换播放状态')
-                        toggleAudioPlay(att.id)
-                      }
-                    }}
-                    title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
-                  >
-                    
-                    {/* 音频播放时的灰色半透明遮罩 */}
-                    {hasStartedPlaying && (
-                      <div
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          background: 'rgba(128, 128, 128, 0.3)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          position: 'relative'
-                        }}
-                      >
-                        {/* 隐藏的音频元素 */}
-                        <audio
-                          ref={el => { 
-                            if (el) {
-                              audioRefs.current[att.id] = el
-                              console.log(`音频元素已创建: ${att.id}`, el)
-                              // 初始化音频状态
-                              if (!audioStates[att.id]) {
-                                setAudioStates(prev => ({
-                                  ...prev,
-                                  [att.id]: {
-                                    playing: false,
-                                    hasStarted: false,
-                                    currentTime: 0,
-                                    duration: 0
-                                  }
-                                }))
-                              }
-                            }
-                          }}
-                          src={att.audioUrl}
-                          style={{ display: 'none' }}
-                          preload="metadata"
-                          onTimeUpdate={() => {
-                            const audioEl = audioRefs.current[att.id]
-                            if (audioEl) {
-                              setAudioStates(prev => ({ 
-                                ...prev, 
-                                [att.id]: { 
-                                  ...prev[att.id], 
-                                  currentTime: audioEl.currentTime 
-                                } 
-                              }))
-                            }
-                          }}
-                          onLoadedMetadata={() => {
-                            const audioEl = audioRefs.current[att.id]
-                            if (audioEl) {
-                              console.log(`音频元数据已加载: ${att.id}`, { duration: audioEl.duration })
-                              setAudioStates(prev => ({ 
-                                ...prev, 
-                                [att.id]: { 
-                                  ...prev[att.id], 
-                                  duration: audioEl.duration 
-                                } 
-                              }))
-                            }
-                          }}
-                          onPlay={() => {
-                            console.log(`音频开始播放: ${att.id}`)
-                            setAudioStates(prev => ({ 
-                              ...prev, 
-                              [att.id]: { 
-                                ...prev[att.id], 
-                                playing: true 
-                              } 
-                            }))
-                          }}
-                          onPause={() => {
-                            console.log(`音频暂停: ${att.id}`)
-                            setAudioStates(prev => ({ 
-                              ...prev, 
-                              [att.id]: { 
-                                ...prev[att.id], 
-                                playing: false 
-                              } 
-                            }))
-                          }}
-                          onError={(e) => {
-                            console.error(`音频加载错误: ${att.id}`, e)
-                          }}
-                        />
-                      </div>
-                    )}
-                    
-                    {/* 播放按钮覆盖层 */}
-                    {(!hasStartedPlaying || !isPlaying) && (
-                      <div 
-                        style={{
-                          ...styles.videoPlayOverlay,
-                          pointerEvents: 'none', // 让点击事件穿透到父容器
-                          zIndex: 50000 // 确保播放按钮在最上层
-                        }}
-                      >
-                        ▶
-                      </div>
-                    )}
-                    
-                  </div>
-                )
-              })}
-
-            {/* 音频文件名标识 - 独立渲染在音频容器外部 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
-              .map(att => {
-                const hasStartedPlaying = audioStates[att.id]?.hasStarted
-                if (hasStartedPlaying) return null // 播放时不显示文件名
-                
-                return (
-                  <div
-                    key={`audio_filename_${att.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: att.area.x,
-                      top: att.area.y - 25, // 在bbox上方显示
-                      background: 'rgba(0,0,0,0.8)',
-                      color: 'white',
-                      padding: '4px 8px',
-                      borderRadius: 4,
-                      fontSize: '11px',
-                      pointerEvents: 'none',
-                      userSelect: 'none',
-                      zIndex: 1000,
-                      maxWidth: att.area.width,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    🎵 {att.fileName}
-                  </div>
-                )
-              })}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
-              .map(att => (
-                <AudioProgressBar
-                  key={`audio_progress_${att.id}`}
-                  attachment={att}
-                  audioStates={audioStates}
-                  handleAudioProgressChange={handleAudioProgressChange}
-                  formatTime={formatTime}
-                />
-              ))}
-
-            {/* 图片文件名标识 - 独立渲染在图片容器外部 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
-              .map(att => (
+            <PDFPageView
+              pageNumber={pageNumber}
+            width={pageRenderSizes[pageNumber]?.width || (typeof contentDimensions.width === 'number' ? contentDimensions.width : undefined)}
+            blocks={overlayBlocks}
+            wrapperStyle={styles.pageWrapper}
+            containerStyle={styles.pageContainer}
+            wrapperProps={{
+              ref: (node) => { if (node) pageWrapperRef.current = node },
+              onContextMenu: handleContextMenu
+            }}
+            layerProps={{
+              interactive: false,
+              style: { zIndex: 8, pointerEvents: 'none' }
+            }}
+            pageProps={{
+              renderAnnotationLayer: true,
+              renderTextLayer: true,
+              className: 'interactive-page',
+              onLoadError: (error) => {
+                console.error('页面渲染失败:', error)
+                setError('页面渲染失败: ' + error.message)
+                setLoading(false)
+              }
+            }}
+            onViewportReady={(viewportInfo) => handlePageViewportReady(pageNumber, viewportInfo)}
+            renderOverlay={({ metrics }) => {
+              if (!metrics) return null
+              return (
                 <div
-                  key={`image_filename_${att.id}`}
                   style={{
                     position: 'absolute',
-                    left: att.area.x,
-                    top: att.area.y - 25, // 在bbox上方显示
-                    background: 'rgba(0,0,0,0.8)',
-                    color: 'white',
-                    padding: '4px 8px',
-                    borderRadius: 4,
-                    fontSize: '11px',
-                    pointerEvents: 'none',
-                    userSelect: 'none',
-                    zIndex: 1000,
-                    maxWidth: att.area.width,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
+                    left: metrics.offsetX || 0,
+                    top: metrics.offsetY || 0,
+                    width: metrics.renderWidth,
+                    height: metrics.renderHeight,
+                    pointerEvents: 'none'
                   }}
                 >
-                  🖼️ {att.fileName}
+                              {/* 视频覆盖块：在原始PDF上覆盖控制图标，点击时才渲染视频 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+                                .map(att => {
+                                  const area = att.area
+                                  const isPlaying = videoStates[att.id]?.playing
+                                  const hasStartedPlaying = videoStates[att.id]?.hasStarted
+                                  return (
+                                    <div
+                                      key={`video_${att.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: area.x,
+                                        top: area.y,
+                                        width: area.width,
+                                        height: area.height,
+                                        zIndex: 10010, // 高于hover_region，确保可以接收点击事件
+                                        overflow: 'hidden',
+                                        borderRadius: hasStartedPlaying ? 4 : 0,
+                                        boxShadow: 'none', // 移除阴影效果
+                                        // 初始状态：透明背景，让原始PDF内容显示
+                                        background: hasStartedPlaying ? '#000' : 'transparent',
+                                        pointerEvents: 'auto',
+                                        cursor: 'pointer' // 添加指针样式
+                                      }}
+                                      onClick={(e) => { 
+                                        e.stopPropagation(); 
+                                        console.log('视频点击事件触发', { hasStartedPlaying, attId: att.id })
+                                        
+                                        if (!hasStartedPlaying) {
+                                          // 首次点击，开始播放视频
+                                          console.log('开始播放视频')
+                                          setVideoStates(prev => ({ 
+                                            ...prev, 
+                                            [att.id]: { playing: true, hasStarted: true } 
+                                          }))
+                                          // 延迟一点让video元素先渲染
+                                          setTimeout(() => {
+                                            const videoEl = videoRefs.current[att.id]
+                                            console.log('尝试播放视频元素', videoEl)
+                                            if (videoEl) {
+                                              videoEl.play().then(() => {
+                                                console.log('视频播放成功')
+                                              }).catch(e => {
+                                                console.error('视频播放失败:', e)
+                                              })
+                                            }
+                                          }, 100)
+                                        } else {
+                                          // 后续点击，切换播放/暂停
+                                          console.log('切换播放状态')
+                                          toggleVideoPlay(att.id)
+                                        }
+                                      }}
+                                      title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
+                                    >
+                                      
+                                      {/* 只有开始播放后才渲染视频元素 */}
+                                      {hasStartedPlaying && (
+                                        <video
+                                          ref={el => { if (el) videoRefs.current[att.id] = el }}
+                                          src={att.videoUrl}
+                                          style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            objectFit: 'cover',
+                                            display: 'block'
+                                          }}
+                                          muted
+                                          playsInline
+                                          onPlay={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: true } }))}
+                                          onPause={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
+                                          onEnded={() => setVideoStates(prev => ({ ...prev, [att.id]: { ...prev[att.id], playing: false } }))}
+                                          onTimeUpdate={() => {
+                                            const video = videoRefs.current[att.id]
+                                            if (video) {
+                                              setVideoStates(prev => ({ 
+                                                ...prev, 
+                                                [att.id]: { 
+                                                  ...prev[att.id], 
+                                                  currentTime: video.currentTime,
+                                                  duration: video.duration || prev[att.id]?.duration || 0
+                                                } 
+                                              }))
+                                            }
+                                          }}
+                                          onLoadedMetadata={() => {
+                                            const video = videoRefs.current[att.id]
+                                            if (video) {
+                                              // 设置初始播放速度
+                                              const playbackRate = videoStates[att.id]?.playbackRate || 1
+                                              video.playbackRate = playbackRate
+                                              
+                                              setVideoStates(prev => ({ 
+                                                ...prev, 
+                                                [att.id]: { 
+                                                  ...prev[att.id], 
+                                                  duration: video.duration || 0,
+                                                  playbackRate: playbackRate
+                                                } 
+                                              }))
+                                            }
+                                          }}
+                                        />
+                                      )}
+                                      
+                                      {/* 播放按钮覆盖层 */}
+                                      {(!hasStartedPlaying || !isPlaying) && (
+                                        <div 
+                                          style={{
+                                            ...styles.videoPlayOverlay,
+                                            pointerEvents: 'none', // 让点击事件穿透到父容器
+                                            zIndex: 50000 // 确保播放按钮在最上层
+                                          }}
+                                        >
+                                          ▶
+                                        </div>
+                                      )}
+                                      
+                                    </div>
+                                  )
+                                })}
+
+                              {/* 视频文件名标识 - 独立渲染在视频容器外部 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+                                .map(att => {
+                                  const hasStartedPlaying = videoStates[att.id]?.hasStarted
+                                  if (hasStartedPlaying) return null // 播放时不显示文件名
+                                  
+                                  return (
+                                    <div
+                                      key={`video_filename_${att.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: att.area.x,
+                                        top: att.area.y - 25, // 在bbox上方显示
+                                        background: 'rgba(0,0,0,0.8)',
+                                        color: 'white',
+                                        padding: '4px 8px',
+                                        borderRadius: 4,
+                                        fontSize: '11px',
+                                        pointerEvents: 'none',
+                                        userSelect: 'none',
+                                        zIndex: 1000,
+                                        maxWidth: att.area.width,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                      }}
+                                    >
+                                      📹 {att.fileName}
+                                    </div>
+                                  )
+                                })}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isVideo && att.area && !att.hidden)
+                                .map(att => (
+                                  <VideoProgressBar
+                                    key={`video_progress_${att.id}`}
+                                    attachment={att}
+                                    videoStates={videoStates}
+                                    handleVideoProgressChange={handleVideoProgressChange}
+                                    formatTime={formatTime}
+                                    onPlayPause={handleVideoPlayPause}
+                                    onSpeedChange={handleVideoSpeedChange}
+                                    onFullscreen={handleVideoFullscreen}
+                                  />
+                                ))}
+
+                              {/* 音频覆盖块：完全复制视频的处理逻辑 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
+                                .map(att => {
+                                  const area = att.area
+                                  const isPlaying = audioStates[att.id]?.playing
+                                  const hasStartedPlaying = audioStates[att.id]?.hasStarted
+                                  return (
+                                    <div
+                                      key={`audio_${att.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: area.x,
+                                        top: area.y,
+                                        width: area.width,
+                                        height: area.height,
+                                        zIndex: 10010, // 高于hover_region，确保可以接收点击事件
+                                        overflow: 'hidden',
+                                        borderRadius: hasStartedPlaying ? 4 : 0,
+                                        boxShadow: 'none', // 移除阴影效果
+                                        // 初始状态：透明背景，让原始PDF内容显示
+                                        background: hasStartedPlaying ? 'rgba(0, 123, 255, 0.1)' : 'transparent',
+                                        pointerEvents: 'auto',
+                                        cursor: 'pointer' // 添加指针样式
+                                      }}
+                                      onClick={(e) => { 
+                                        e.stopPropagation(); 
+                                        console.log('音频点击事件触发', { hasStartedPlaying, attId: att.id })
+                                        
+                                        if (!hasStartedPlaying) {
+                                          // 首次点击，开始播放音频
+                                          console.log('开始播放音频')
+                                          setAudioStates(prev => ({ 
+                                            ...prev, 
+                                            [att.id]: { playing: true, hasStarted: true } 
+                                          }))
+                                          // 延迟一点让audio元素先渲染
+                                          setTimeout(() => {
+                                            const audioEl = audioRefs.current[att.id]
+                                            console.log('尝试播放音频元素', audioEl)
+                                            if (audioEl) {
+                                              audioEl.play().then(() => {
+                                                console.log('音频播放成功')
+                                              }).catch(e => {
+                                                console.error('音频播放失败:', e)
+                                              })
+                                            }
+                                          }, 100)
+                                        } else {
+                                          // 后续点击，切换播放/暂停
+                                          console.log('切换播放状态')
+                                          toggleAudioPlay(att.id)
+                                        }
+                                      }}
+                                      title={`${att.fileName}（点击${!hasStartedPlaying ? '播放' : (isPlaying ? '暂停' : '播放')}）`}
+                                    >
+                                      
+                                      {/* 音频播放时的灰色半透明遮罩 */}
+                                      {hasStartedPlaying && (
+                                        <div
+                                          style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            background: 'rgba(128, 128, 128, 0.3)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            position: 'relative'
+                                          }}
+                                        >
+                                          {/* 隐藏的音频元素 */}
+                                          <audio
+                                            ref={el => { 
+                                              if (el) {
+                                                audioRefs.current[att.id] = el
+                                                console.log(`音频元素已创建: ${att.id}`, el)
+                                                // 初始化音频状态
+                                                if (!audioStates[att.id]) {
+                                                  setAudioStates(prev => ({
+                                                    ...prev,
+                                                    [att.id]: {
+                                                      playing: false,
+                                                      hasStarted: false,
+                                                      currentTime: 0,
+                                                      duration: 0
+                                                    }
+                                                  }))
+                                                }
+                                              }
+                                            }}
+                                            src={att.audioUrl}
+                                            style={{ display: 'none' }}
+                                            preload="metadata"
+                                            onTimeUpdate={() => {
+                                              const audioEl = audioRefs.current[att.id]
+                                              if (audioEl) {
+                                                setAudioStates(prev => ({ 
+                                                  ...prev, 
+                                                  [att.id]: { 
+                                                    ...prev[att.id], 
+                                                    currentTime: audioEl.currentTime 
+                                                  } 
+                                                }))
+                                              }
+                                            }}
+                                            onLoadedMetadata={() => {
+                                              const audioEl = audioRefs.current[att.id]
+                                              if (audioEl) {
+                                                console.log(`音频元数据已加载: ${att.id}`, { duration: audioEl.duration })
+                                                setAudioStates(prev => ({ 
+                                                  ...prev, 
+                                                  [att.id]: { 
+                                                    ...prev[att.id], 
+                                                    duration: audioEl.duration 
+                                                  } 
+                                                }))
+                                              }
+                                            }}
+                                            onPlay={() => {
+                                              console.log(`音频开始播放: ${att.id}`)
+                                              setAudioStates(prev => ({ 
+                                                ...prev, 
+                                                [att.id]: { 
+                                                  ...prev[att.id], 
+                                                  playing: true 
+                                                } 
+                                              }))
+                                            }}
+                                            onPause={() => {
+                                              console.log(`音频暂停: ${att.id}`)
+                                              setAudioStates(prev => ({ 
+                                                ...prev, 
+                                                [att.id]: { 
+                                                  ...prev[att.id], 
+                                                  playing: false 
+                                                } 
+                                              }))
+                                            }}
+                                            onError={(e) => {
+                                              console.error(`音频加载错误: ${att.id}`, e)
+                                            }}
+                                          />
+                                        </div>
+                                      )}
+                                      
+                                      {/* 播放按钮覆盖层 */}
+                                      {(!hasStartedPlaying || !isPlaying) && (
+                                        <div 
+                                          style={{
+                                            ...styles.videoPlayOverlay,
+                                            pointerEvents: 'none', // 让点击事件穿透到父容器
+                                            zIndex: 50000 // 确保播放按钮在最上层
+                                          }}
+                                        >
+                                          ▶
+                                        </div>
+                                      )}
+                                      
+                                    </div>
+                                  )
+                                })}
+
+                              {/* 音频文件名标识 - 独立渲染在音频容器外部 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
+                                .map(att => {
+                                  const hasStartedPlaying = audioStates[att.id]?.hasStarted
+                                  if (hasStartedPlaying) return null // 播放时不显示文件名
+                                  
+                                  return (
+                                    <div
+                                      key={`audio_filename_${att.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: att.area.x,
+                                        top: att.area.y - 25, // 在bbox上方显示
+                                        background: 'rgba(0,0,0,0.8)',
+                                        color: 'white',
+                                        padding: '4px 8px',
+                                        borderRadius: 4,
+                                        fontSize: '11px',
+                                        pointerEvents: 'none',
+                                        userSelect: 'none',
+                                        zIndex: 1000,
+                                        maxWidth: att.area.width,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                      }}
+                                    >
+                                      🎵 {att.fileName}
+                                    </div>
+                                  )
+                                })}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isAudio && att.area && !att.hidden)
+                                .map(att => (
+                                  <AudioProgressBar
+                                    key={`audio_progress_${att.id}`}
+                                    attachment={att}
+                                    audioStates={audioStates}
+                                    handleAudioProgressChange={handleAudioProgressChange}
+                                    formatTime={formatTime}
+                                  />
+                                ))}
+
+                              {/* 图片文件名标识 - 独立渲染在图片容器外部 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
+                                .map(att => (
+                                  <div
+                                    key={`image_filename_${att.id}`}
+                                    style={{
+                                      position: 'absolute',
+                                      left: att.area.x,
+                                      top: att.area.y - 25, // 在bbox上方显示
+                                      background: 'rgba(0,0,0,0.8)',
+                                      color: 'white',
+                                      padding: '4px 8px',
+                                      borderRadius: 4,
+                                      fontSize: '11px',
+                                      pointerEvents: 'none',
+                                      userSelect: 'none',
+                                      zIndex: 1000,
+                                      maxWidth: att.area.width,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    🖼️ {att.fileName}
+                                  </div>
+                                ))}
+
+                              {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
+                              {attachments
+                                .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
+                                .map(att => {
+                                  const area = att.area
+                                  const fit = imageStates[att.id]?.fit || 'cover'
+                                  return (
+                                    <div
+                                      key={`image_${att.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: area.x,
+                                        top: area.y,
+                                        width: area.width,
+                                        height: area.height,
+                                        zIndex: 12,
+                                        overflow: 'hidden',
+                                        borderRadius: 4,
+                                        boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                                      }}
+                                      title={`${att.fileName}（点击切换铺放模式）`}
+                                      onClick={(e) => { e.stopPropagation(); toggleImageFit(att.id) }}
+                                      onDoubleClick={(e) => { e.stopPropagation(); const w = window.open(att.imageUrl, '_blank'); if (w) w.document.title = att.fileName }}
+                                    >
+                                      <img
+                                        src={att.imageUrl}
+                                        alt={att.fileName}
+                                        draggable={false}
+                                        style={{ width: '100%', height: '100%', objectFit: fit, display: 'block' }}
+                                      />
+                                      <div style={styles.imageFitOverlay}>{fit === 'cover' ? '填充' : '适应'}</div>
+                                    </div>
+                                  )
+                                })}
+
+                              {/* 悬浮于图/表区域时，显示显示/隐藏按钮（阅读器模式） */}
+                              {(() => {
+                                const anns = (parsedByPage[pageNumber] || []).filter(a => a.type === 'image' || a.type === 'table' || (!a.id?.startsWith?.('text') && a.type !== 'text'))
+                                if (!anns.length) return null
+                                return anns.map(ann => {
+                                  return (
+                                    <div
+                                      key={`hover_region_${ann.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: ann.position.x,
+                                        top: ann.position.y - 30, // 向上扩展30px来覆盖按钮
+                                        width: ann.position.width,
+                                        height: ann.position.height + 30, // 增加高度来包含按钮区域
+                                        background: 'transparent',
+                                        zIndex: 10005, // 确保在视频容器之上
+                                        pointerEvents: 'auto' // 恢复正常的鼠标事件处理
+                                      }}
+                                      onMouseEnter={() => setHoveredAnnId(ann.id)}
+                                      onMouseLeave={() => setHoveredAnnId(prev => (prev === ann.id ? null : prev))}
+                                      onClick={(e) => { e.stopPropagation() }}
+                                      title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
+                                    >
+                                    {hoveredAnnId === ann.id && (
+                                      <div style={{ position: 'relative' }}>
+                                        {/* 阅读器模式：只显示显示/隐藏按钮，隐藏上传按钮 */}
+                                        <VisibilityButton
+                                          position={{
+                                            left: 8,
+                                            top: 0
+                                          }}
+                                          ann={ann}
+                                          attachments={attachments}
+                                          pageNumber={pageNumber}
+                                          toggleAttachmentVisibility={toggleAttachmentVisibility}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                  )
+                                })
+                              })()}
+
+                              {/* 渲染关联的图片标记（放到与页面同层） */}
+                              {associatedImages
+                                .filter(img => img.pageNumber === pageNumber)
+                                .map(img => (
+                                  <div
+                                    key={img.id}
+                                    style={{
+                                      ...styles.associatedImage,
+                                      left: (img.area?.x ?? 20),
+                                      top: (img.area?.y ?? 20)
+                                    }}
+                                    title={`关联图片: ${img.fileName}`}
+                                    onClick={() => {
+                                      // 点击显示图片预览
+                                      const preview = window.open(img.imageUrl, '_blank')
+                                      if (preview) {
+                                        preview.document.title = img.fileName
+                                      }
+                                    }}
+                                  >
+                                    🖼️
+                                  </div>
+                                ))
+                              }
+
+                              {/* 调试：显示解析块边界框 */}
+                              {showDebugBounds && (() => {
+                                const anns = parsedByPage[pageNumber] || []
+                                const base = basePageSize[pageNumber]
+                                
+                                console.log('边界框渲染检查:', {
+                                  showDebugBounds,
+                                  annsCount: anns.length,
+                                  base,
+                                  pageNumber
+                                })
+                                
+                                if (!base) {
+                                  console.log('没有basePageSize，跳过边界框渲染')
+                                  return null
+                                }
+                                
+                                const overlays = []
+
+                                // 如果没有任何解析块，至少画出整页边框，帮助确认层级无问题
+                                if (anns.length === 0) {
+                                  const offsetX = metrics?.offsetX || 0
+                                  const offsetY = metrics?.offsetY || 0
+                                  const renderWidth = metrics?.renderWidth || (base.width * pageScale)
+                                  const renderHeight = metrics?.renderHeight || (base.height * pageScale)
+                                  overlays.push(
+                                    <div
+                                      key={`debug-page-${pageNumber}`}
+
+
+
+                                      style={{
+                                        position: 'absolute',
+                                        left: offsetX,
+                                        top: offsetY,
+                                        width: renderWidth,
+                                        height: renderHeight,
+                                        border: '2px dashed #999',
+                                        background: 'transparent',
+                                        pointerEvents: 'none',
+                                        zIndex: 14
+                                      }}
+                                      title={'页面边界(用于调试)'}
+                                    />
+                                  )
+                                }
+
+                                anns.forEach((ann) => {
+                                  const r = ann.position
+                                  // 现在所有position均为容器像素坐标，直接渲染
+                                  const left = r.x
+                                  const top = r.y
+                                  const width = r.width
+                                  const height = r.height
+                                  
+                                  overlays.push(
+                                    <div
+                                      key={`debug-${ann.id}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left,
+                                        top,
+                                        width,
+                                        height,
+                                        border: ann.type === 'table' ? '3px solid green' : 
+                                                ann.type === 'image' ? '3px solid lightblue' : '1px solid red',
+                                        backgroundColor: ann.type === 'table' ? 'rgba(0,0,0,0)' : 
+                                                        ann.type === 'image' ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)',
+                                        pointerEvents: 'none',
+                                        zIndex: 15,
+                                        fontSize: '10px',
+                                        color: ann.type === 'text' ? 'red' : 'blue',
+                                        padding: '2px',
+                                        overflow: 'hidden'
+                                      }}
+                                      title={`${ann.type}: ${ann.content || ann.name}`}
+                                    >
+                                    </div>
+                                  )
+                                })
+                                return overlays
+                              })()}
                 </div>
-              ))}
-
-            {/* 图片覆盖块：恰好覆盖识别区，点击切换填充模式或打开新窗口 */}
-            {attachments
-              .filter(att => att.pageNumber === pageNumber && att.isImage && att.area && !att.hidden)
-              .map(att => {
-                const area = att.area
-                const fit = imageStates[att.id]?.fit || 'cover'
-                return (
-                  <div
-                    key={`image_${att.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: area.x,
-                      top: area.y,
-                      width: area.width,
-                      height: area.height,
-                      zIndex: 12,
-                      overflow: 'hidden',
-                      borderRadius: 4,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
-                    }}
-                    title={`${att.fileName}（点击切换铺放模式）`}
-                    onClick={(e) => { e.stopPropagation(); toggleImageFit(att.id) }}
-                    onDoubleClick={(e) => { e.stopPropagation(); const w = window.open(att.imageUrl, '_blank'); if (w) w.document.title = att.fileName }}
-                  >
-                    <img
-                      src={att.imageUrl}
-                      alt={att.fileName}
-                      draggable={false}
-                      style={{ width: '100%', height: '100%', objectFit: fit, display: 'block' }}
-                    />
-                    <div style={styles.imageFitOverlay}>{fit === 'cover' ? '填充' : '适应'}</div>
-                  </div>
-                )
-              })}
-
-            {/* 悬浮于图/表区域时，显示显示/隐藏按钮（阅读器模式） */}
-            {(() => {
-              const anns = (parsedByPage[pageNumber] || []).filter(a => a.type === 'image' || a.type === 'table' || (!a.id?.startsWith?.('text') && a.type !== 'text'))
-              if (!anns.length) return null
-              return anns.map(ann => {
-                return (
-                  <div
-                    key={`hover_region_${ann.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: ann.position.x,
-                      top: ann.position.y - 30, // 向上扩展30px来覆盖按钮
-                      width: ann.position.width,
-                      height: ann.position.height + 30, // 增加高度来包含按钮区域
-                      background: 'transparent',
-                      zIndex: 10005, // 确保在视频容器之上
-                      pointerEvents: 'auto' // 恢复正常的鼠标事件处理
-                    }}
-                    onMouseEnter={() => setHoveredAnnId(ann.id)}
-                    onMouseLeave={() => setHoveredAnnId(prev => (prev === ann.id ? null : prev))}
-                    onClick={(e) => { e.stopPropagation() }}
-                    title={ann.name || (ann.type === 'image' ? '图片' : '表格')}
-                  >
-                  {hoveredAnnId === ann.id && (
-                    <div style={{ position: 'relative' }}>
-                      {/* 阅读器模式：只显示显示/隐藏按钮，隐藏上传按钮 */}
-                      <VisibilityButton
-                        position={{
-                          left: 8,
-                          top: 0
-                        }}
-                        ann={ann}
-                        attachments={attachments}
-                        pageNumber={pageNumber}
-                        toggleAttachmentVisibility={toggleAttachmentVisibility}
-                      />
-                    </div>
-                  )}
-                </div>
-                )
-              })
-            })()}
-
-            {/* 渲染关联的图片标记（放到与页面同层） */}
-            {associatedImages
-              .filter(img => img.pageNumber === pageNumber)
-              .map(img => (
-                <div
-                  key={img.id}
-                  style={{
-                    ...styles.associatedImage,
-                    left: (img.area?.x ?? 20),
-                    top: (img.area?.y ?? 20)
-                  }}
-                  title={`关联图片: ${img.fileName}`}
-                  onClick={() => {
-                    // 点击显示图片预览
-                    const preview = window.open(img.imageUrl, '_blank')
-                    if (preview) {
-                      preview.document.title = img.fileName
-                    }
-                  }}
-                >
-                  🖼️
-                </div>
-              ))
-            }
-
-            {/* 调试：显示解析块边界框 */}
-            {showDebugBounds && (() => {
-              const anns = parsedByPage[pageNumber] || []
-              const base = basePageSize[pageNumber]
-              
-              console.log('边界框渲染检查:', {
-                showDebugBounds,
-                annsCount: anns.length,
-                base,
-                pageNumber
-              })
-              
-              if (!base) {
-                console.log('没有basePageSize，跳过边界框渲染')
-                return null
-              }
-              
-              const overlays = []
-
-              // 如果没有任何解析块，至少画出整页边框，帮助确认层级无问题
-              if (anns.length === 0) {
-                const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
-                const pageRect = pageWrapperRef.current?.querySelector('.react-pdf__Page')?.getBoundingClientRect()
-                const oX = pageRect && wrapperRect ? (pageRect.left - wrapperRect.left) : 0
-                const oY = pageRect && wrapperRect ? (pageRect.top - wrapperRect.top) : 0
-                overlays.push(
-                  <div
-                    key={`debug-page-${pageNumber}`}
-                    style={{
-                      position: 'absolute',
-                      left: oX,
-                      top: oY,
-                      width: base.width * pageScale,
-                      height: base.height * pageScale,
-                      border: '2px dashed #999',
-                      background: 'transparent',
-                      pointerEvents: 'none',
-                      zIndex: 14
-                    }}
-                    title={'页面边界(用于调试)'}
-                  />
-                )
-              }
-
-              anns.forEach((ann) => {
-                const r = ann.position
-                // 现在所有position均为容器像素坐标，直接渲染
-                const left = r.x
-                const top = r.y
-                const width = r.width
-                const height = r.height
-                
-                overlays.push(
-                  <div
-                    key={`debug-${ann.id}`}
-                    style={{
-                      position: 'absolute',
-                      left,
-                      top,
-                      width,
-                      height,
-                      border: ann.type === 'table' ? '3px solid green' : 
-                              ann.type === 'image' ? '3px solid lightblue' : '1px solid red',
-                      backgroundColor: ann.type === 'table' ? 'rgba(0,0,0,0)' : 
-                                      ann.type === 'image' ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)',
-                      pointerEvents: 'none',
-                      zIndex: 15,
-                      fontSize: '10px',
-                      color: ann.type === 'text' ? 'red' : 'blue',
-                      padding: '2px',
-                      overflow: 'hidden'
-                    }}
-                    title={`${ann.type}: ${ann.content || ann.name}`}
-                  >
-                  </div>
-                )
-              })
-              return overlays
-            })()}
-          </div>
+              )
+            }}
+          />
+          </Document>
         </div>
-      </div>
       </div>
 
       {/* 上下文菜单 - 阅读器模式已隐藏 */}
@@ -4313,11 +4453,10 @@ const KDFReader = ({ file }) => {
       )}
         </div>
       </div>
-
+      </div>
     </div>
   )
 }
-
 const styles = {
   container: {
     display: 'flex',

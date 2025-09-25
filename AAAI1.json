@@ -1,0 +1,1567 @@
+{
+  "jobId": "80",
+  "blocksByPage": {
+    "1": [
+      {
+        "id": "text_1_0",
+        "type": "text",
+        "bbox": [
+          210,
+          119,
+          787,
+          161
+        ],
+        "page": 1,
+        "bboxid": 7562
+      },
+      {
+        "id": "text_1_1",
+        "type": "text",
+        "bbox": [
+          295,
+          178,
+          705,
+          195
+        ],
+        "page": 1,
+        "bboxid": 7563
+      },
+      {
+        "id": "text_1_2",
+        "type": "text",
+        "bbox": [
+          199,
+          202,
+          795,
+          229
+        ],
+        "page": 1,
+        "bboxid": 7564
+      },
+      {
+        "id": "text_1_3",
+        "type": "text",
+        "bbox": [
+          251,
+          273,
+          312,
+          287
+        ],
+        "page": 1,
+        "bboxid": 7565
+      },
+      {
+        "id": "text_1_4",
+        "type": "text",
+        "bbox": [
+          102,
+          297,
+          460,
+          588
+        ],
+        "page": 1,
+        "bboxid": 7566
+      },
+      {
+        "id": "text_1_5",
+        "type": "text",
+        "bbox": [
+          84,
+          594,
+          470,
+          608
+        ],
+        "page": 1,
+        "bboxid": 7567
+      },
+      {
+        "id": "text_1_6",
+        "type": "text",
+        "bbox": [
+          228,
+          625,
+          334,
+          640
+        ],
+        "page": 1,
+        "bboxid": 7568
+      },
+      {
+        "id": "text_1_7",
+        "type": "text",
+        "bbox": [
+          86,
+          645,
+          477,
+          852
+        ],
+        "page": 1,
+        "bboxid": 7569
+      },
+      {
+        "id": "text_1_8",
+        "type": "text",
+        "bbox": [
+          519,
+          273,
+          911,
+          453
+        ],
+        "page": 1,
+        "bboxid": 7570
+      },
+      {
+        "id": "text_1_9",
+        "type": "text",
+        "bbox": [
+          521,
+          463,
+          911,
+          726
+        ],
+        "page": 1,
+        "bboxid": 7571
+      },
+      {
+        "id": "text_1_10",
+        "type": "text",
+        "bbox": [
+          519,
+          736,
+          910,
+          887
+        ],
+        "page": 1,
+        "bboxid": 7572
+      }
+    ],
+    "2": [
+      {
+        "id": "text_2_0",
+        "type": "text",
+        "bbox": [
+          86,
+          68,
+          477,
+          208
+        ],
+        "page": 2,
+        "bboxid": 7573
+      },
+      {
+        "id": "text_2_1",
+        "type": "text",
+        "bbox": [
+          86,
+          218,
+          477,
+          398
+        ],
+        "page": 2,
+        "bboxid": 7574
+      },
+      {
+        "id": "text_2_2",
+        "type": "text",
+        "bbox": [
+          86,
+          627,
+          477,
+          712
+        ],
+        "page": 2,
+        "bboxid": 7575
+      },
+      {
+        "id": "image_2_3",
+        "type": "image",
+        "bbox": [
+          527,
+          65,
+          905,
+          157
+        ],
+        "page": 2,
+        "bboxid": 7576
+      },
+      {
+        "id": "text_2_4",
+        "type": "text",
+        "bbox": [
+          658,
+          320,
+          772,
+          337
+        ],
+        "page": 2,
+        "bboxid": 7577
+      },
+      {
+        "id": "text_2_5",
+        "type": "text",
+        "bbox": [
+          519,
+          340,
+          911,
+          410
+        ],
+        "page": 2,
+        "bboxid": 7578
+      },
+      {
+        "id": "text_2_6",
+        "type": "text",
+        "bbox": [
+          519,
+          417,
+          911,
+          652
+        ],
+        "page": 2,
+        "bboxid": 7579
+      },
+      {
+        "id": "equation_2_7",
+        "type": "equation",
+        "bbox": [
+          619,
+          659,
+          812,
+          694
+        ],
+        "page": 2,
+        "bboxid": 7580
+      },
+      {
+        "id": "text_2_8",
+        "type": "text",
+        "bbox": [
+          519,
+          700,
+          911,
+          756
+        ],
+        "page": 2,
+        "bboxid": 7581
+      },
+      {
+        "id": "text_2_9",
+        "type": "text",
+        "bbox": [
+          519,
+          762,
+          911,
+          888
+        ],
+        "page": 2,
+        "bboxid": 7582
+      }
+    ],
+    "3": [
+      {
+        "id": "image_3_0",
+        "type": "image",
+        "bbox": [
+          86,
+          65,
+          475,
+          200
+        ],
+        "page": 3,
+        "bboxid": 7583
+      },
+      {
+        "id": "text_3_1",
+        "type": "text",
+        "bbox": [
+          86,
+          280,
+          478,
+          391
+        ],
+        "page": 3,
+        "bboxid": 7584
+      },
+      {
+        "id": "text_3_2",
+        "type": "text",
+        "bbox": [
+          86,
+          398,
+          478,
+          551
+        ],
+        "page": 3,
+        "bboxid": 7585
+      },
+      {
+        "id": "equation_3_3",
+        "type": "equation",
+        "bbox": [
+          202,
+          558,
+          361,
+          577
+        ],
+        "page": 3,
+        "bboxid": 7586
+      },
+      {
+        "id": "text_3_4",
+        "type": "text",
+        "bbox": [
+          86,
+          584,
+          477,
+          669
+        ],
+        "page": 3,
+        "bboxid": 7587
+      },
+      {
+        "id": "text_3_5",
+        "type": "text",
+        "bbox": [
+          169,
+          681,
+          395,
+          698
+        ],
+        "page": 3,
+        "bboxid": 7588
+      },
+      {
+        "id": "text_3_6",
+        "type": "text",
+        "bbox": [
+          86,
+          700,
+          478,
+          853
+        ],
+        "page": 3,
+        "bboxid": 7589
+      },
+      {
+        "id": "text_3_7",
+        "type": "text",
+        "bbox": [
+          84,
+          861,
+          478,
+          888
+        ],
+        "page": 3,
+        "bboxid": 7590
+      },
+      {
+        "id": "text_3_8",
+        "type": "text",
+        "bbox": [
+          519,
+          69,
+          911,
+          137
+        ],
+        "page": 3,
+        "bboxid": 7591
+      },
+      {
+        "id": "equation_3_9",
+        "type": "equation",
+        "bbox": [
+          655,
+          136,
+          774,
+          166
+        ],
+        "page": 3,
+        "bboxid": 7592
+      },
+      {
+        "id": "text_3_10",
+        "type": "text",
+        "bbox": [
+          519,
+          170,
+          911,
+          226
+        ],
+        "page": 3,
+        "bboxid": 7593
+      },
+      {
+        "id": "text_3_11",
+        "type": "text",
+        "bbox": [
+          519,
+          234,
+          911,
+          318
+        ],
+        "page": 3,
+        "bboxid": 7594
+      },
+      {
+        "id": "equation_3_12",
+        "type": "equation",
+        "bbox": [
+          656,
+          325,
+          772,
+          357
+        ],
+        "page": 3,
+        "bboxid": 7595
+      },
+      {
+        "id": "text_3_13",
+        "type": "text",
+        "bbox": [
+          519,
+          363,
+          911,
+          405
+        ],
+        "page": 3,
+        "bboxid": 7596
+      },
+      {
+        "id": "text_3_14",
+        "type": "text",
+        "bbox": [
+          661,
+          420,
+          769,
+          436
+        ],
+        "page": 3,
+        "bboxid": 7597
+      },
+      {
+        "id": "text_3_15",
+        "type": "text",
+        "bbox": [
+          521,
+          441,
+          673,
+          457
+        ],
+        "page": 3,
+        "bboxid": 7598
+      },
+      {
+        "id": "text_3_16",
+        "type": "text",
+        "bbox": [
+          519,
+          460,
+          911,
+          544
+        ],
+        "page": 3,
+        "bboxid": 7599
+      },
+      {
+        "id": "text_3_17",
+        "type": "text",
+        "bbox": [
+          519,
+          553,
+          911,
+          691
+        ],
+        "page": 3,
+        "bboxid": 7600
+      },
+      {
+        "id": "text_3_18",
+        "type": "text",
+        "bbox": [
+          519,
+          699,
+          911,
+          784
+        ],
+        "page": 3,
+        "bboxid": 7601
+      },
+      {
+        "id": "text_3_19",
+        "type": "text",
+        "bbox": [
+          519,
+          791,
+          911,
+          888
+        ],
+        "page": 3,
+        "bboxid": 7602
+      }
+    ],
+    "4": [
+      {
+        "id": "table_4_0",
+        "type": "table",
+        "bbox": [
+          86,
+          65,
+          477,
+          297
+        ],
+        "page": 4,
+        "bboxid": 7603
+      },
+      {
+        "id": "text_4_1",
+        "type": "text",
+        "bbox": [
+          86,
+          434,
+          477,
+          531
+        ],
+        "page": 4,
+        "bboxid": 7604
+      },
+      {
+        "id": "text_4_2",
+        "type": "text",
+        "bbox": [
+          88,
+          545,
+          292,
+          560
+        ],
+        "page": 4,
+        "bboxid": 7605
+      },
+      {
+        "id": "text_4_3",
+        "type": "text",
+        "bbox": [
+          86,
+          565,
+          475,
+          593
+        ],
+        "page": 4,
+        "bboxid": 7606
+      },
+      {
+        "id": "text_4_4",
+        "type": "text",
+        "bbox": [
+          84,
+          602,
+          477,
+          657
+        ],
+        "page": 4,
+        "bboxid": 7607
+      },
+      {
+        "id": "text_4_5",
+        "type": "text",
+        "bbox": [
+          86,
+          666,
+          477,
+          888
+        ],
+        "page": 4,
+        "bboxid": 7608
+      },
+      {
+        "id": "text_4_6",
+        "type": "text",
+        "bbox": [
+          519,
+          69,
+          676,
+          82
+        ],
+        "page": 4,
+        "bboxid": 7609
+      },
+      {
+        "id": "text_4_7",
+        "type": "text",
+        "bbox": [
+          519,
+          92,
+          911,
+          243
+        ],
+        "page": 4,
+        "bboxid": 7610
+      },
+      {
+        "id": "text_4_8",
+        "type": "text",
+        "bbox": [
+          519,
+          253,
+          911,
+          404
+        ],
+        "page": 4,
+        "bboxid": 7611
+      },
+      {
+        "id": "text_4_9",
+        "type": "text",
+        "bbox": [
+          519,
+          414,
+          910,
+          607
+        ],
+        "page": 4,
+        "bboxid": 7612
+      },
+      {
+        "id": "text_4_10",
+        "type": "text",
+        "bbox": [
+          519,
+          619,
+          707,
+          636
+        ],
+        "page": 4,
+        "bboxid": 7613
+      },
+      {
+        "id": "text_4_11",
+        "type": "text",
+        "bbox": [
+          519,
+          640,
+          911,
+          667
+        ],
+        "page": 4,
+        "bboxid": 7614
+      },
+      {
+        "id": "text_4_12",
+        "type": "text",
+        "bbox": [
+          519,
+          676,
+          911,
+          718
+        ],
+        "page": 4,
+        "bboxid": 7615
+      },
+      {
+        "id": "text_4_13",
+        "type": "text",
+        "bbox": [
+          521,
+          727,
+          911,
+          866
+        ],
+        "page": 4,
+        "bboxid": 7616
+      },
+      {
+        "id": "text_4_14",
+        "type": "text",
+        "bbox": [
+          519,
+          875,
+          911,
+          888
+        ],
+        "page": 4,
+        "bboxid": 7617
+      }
+    ],
+    "5": [
+      {
+        "id": "table_5_0",
+        "type": "table",
+        "bbox": [
+          112,
+          66,
+          888,
+          515
+        ],
+        "page": 5,
+        "bboxid": 7618
+      },
+      {
+        "id": "text_5_1",
+        "type": "text",
+        "bbox": [
+          86,
+          607,
+          477,
+          704
+        ],
+        "page": 5,
+        "bboxid": 7619
+      },
+      {
+        "id": "text_5_2",
+        "type": "text",
+        "bbox": [
+          86,
+          736,
+          477,
+          887
+        ],
+        "page": 5,
+        "bboxid": 7620
+      },
+      {
+        "id": "text_5_3",
+        "type": "text",
+        "bbox": [
+          522,
+          606,
+          803,
+          622
+        ],
+        "page": 5,
+        "bboxid": 7621
+      },
+      {
+        "id": "text_5_4",
+        "type": "text",
+        "bbox": [
+          519,
+          627,
+          910,
+          654
+        ],
+        "page": 5,
+        "bboxid": 7622
+      },
+      {
+        "id": "text_5_5",
+        "type": "text",
+        "bbox": [
+          522,
+          662,
+          802,
+          678
+        ],
+        "page": 5,
+        "bboxid": 7623
+      },
+      {
+        "id": "text_5_6",
+        "type": "text",
+        "bbox": [
+          521,
+          685,
+          911,
+          824
+        ],
+        "page": 5,
+        "bboxid": 7624
+      },
+      {
+        "id": "text_5_7",
+        "type": "text",
+        "bbox": [
+          519,
+          833,
+          911,
+          888
+        ],
+        "page": 5,
+        "bboxid": 7625
+      }
+    ],
+    "6": [
+      {
+        "id": "image_6_0",
+        "type": "image",
+        "bbox": [
+          89,
+          68,
+          906,
+          279
+        ],
+        "page": 6,
+        "bboxid": 7626
+      },
+      {
+        "id": "text_6_1",
+        "type": "text",
+        "bbox": [
+          86,
+          373,
+          156,
+          387
+        ],
+        "page": 6,
+        "bboxid": 7627
+      },
+      {
+        "id": "text_6_2",
+        "type": "text",
+        "bbox": [
+          86,
+          395,
+          478,
+          536
+        ],
+        "page": 6,
+        "bboxid": 7628
+      },
+      {
+        "id": "text_6_3",
+        "type": "text",
+        "bbox": [
+          84,
+          544,
+          477,
+          585
+        ],
+        "page": 6,
+        "bboxid": 7629
+      },
+      {
+        "id": "text_6_4",
+        "type": "text",
+        "bbox": [
+          84,
+          593,
+          477,
+          648
+        ],
+        "page": 6,
+        "bboxid": 7630
+      },
+      {
+        "id": "text_6_5",
+        "type": "text",
+        "bbox": [
+          86,
+          660,
+          217,
+          674
+        ],
+        "page": 6,
+        "bboxid": 7631
+      },
+      {
+        "id": "text_6_6",
+        "type": "text",
+        "bbox": [
+          86,
+          680,
+          477,
+          888
+        ],
+        "page": 6,
+        "bboxid": 7632
+      },
+      {
+        "id": "text_6_7",
+        "type": "text",
+        "bbox": [
+          519,
+          375,
+          911,
+          429
+        ],
+        "page": 6,
+        "bboxid": 7633
+      },
+      {
+        "id": "text_6_8",
+        "type": "text",
+        "bbox": [
+          519,
+          438,
+          910,
+          520
+        ],
+        "page": 6,
+        "bboxid": 7634
+      },
+      {
+        "id": "text_6_9",
+        "type": "text",
+        "bbox": [
+          519,
+          530,
+          911,
+          626
+        ],
+        "page": 6,
+        "bboxid": 7635
+      },
+      {
+        "id": "text_6_10",
+        "type": "text",
+        "bbox": [
+          653,
+          640,
+          779,
+          656
+        ],
+        "page": 6,
+        "bboxid": 7636
+      },
+      {
+        "id": "text_6_11",
+        "type": "text",
+        "bbox": [
+          521,
+          661,
+          764,
+          676
+        ],
+        "page": 6,
+        "bboxid": 7637
+      },
+      {
+        "id": "text_6_12",
+        "type": "text",
+        "bbox": [
+          519,
+          681,
+          911,
+          888
+        ],
+        "page": 6,
+        "bboxid": 7638
+      }
+    ],
+    "7": [
+      {
+        "id": "image_7_0",
+        "type": "image",
+        "bbox": [
+          88,
+          74,
+          480,
+          431
+        ],
+        "page": 7,
+        "bboxid": 7639
+      },
+      {
+        "id": "text_7_1",
+        "type": "text",
+        "bbox": [
+          86,
+          594,
+          477,
+          693
+        ],
+        "page": 7,
+        "bboxid": 7640
+      },
+      {
+        "id": "text_7_2",
+        "type": "text",
+        "bbox": [
+          86,
+          704,
+          325,
+          719
+        ],
+        "page": 7,
+        "bboxid": 7641
+      },
+      {
+        "id": "text_7_3",
+        "type": "text",
+        "bbox": [
+          86,
+          722,
+          477,
+          888
+        ],
+        "page": 7,
+        "bboxid": 7642
+      },
+      {
+        "id": "table_7_4",
+        "type": "table",
+        "bbox": [
+          531,
+          65,
+          901,
+          209
+        ],
+        "page": 7,
+        "bboxid": 7643
+      },
+      {
+        "id": "text_7_5",
+        "type": "text",
+        "bbox": [
+          521,
+          303,
+          911,
+          579
+        ],
+        "page": 7,
+        "bboxid": 7644
+      },
+      {
+        "id": "text_7_6",
+        "type": "text",
+        "bbox": [
+          668,
+          592,
+          763,
+          608
+        ],
+        "page": 7,
+        "bboxid": 7645
+      },
+      {
+        "id": "text_7_7",
+        "type": "text",
+        "bbox": [
+          519,
+          611,
+          911,
+          888
+        ],
+        "page": 7,
+        "bboxid": 7646
+      }
+    ],
+    "8": [
+      {
+        "id": "text_8_0",
+        "type": "text",
+        "bbox": [
+          200,
+          68,
+          362,
+          83
+        ],
+        "page": 8,
+        "bboxid": 7647
+      },
+      {
+        "id": "text_8_1",
+        "type": "text",
+        "bbox": [
+          86,
+          88,
+          478,
+          184
+        ],
+        "page": 8,
+        "bboxid": 7648
+      },
+      {
+        "id": "text_8_2",
+        "type": "text",
+        "bbox": [
+          236,
+          199,
+          328,
+          214
+        ],
+        "page": 8,
+        "bboxid": 7649
+      },
+      {
+        "id": "text_8_3",
+        "type": "text",
+        "bbox": [
+          84,
+          218,
+          478,
+          890
+        ],
+        "page": 8,
+        "bboxid": 7650
+      },
+      {
+        "id": "text_8_4",
+        "type": "text",
+        "bbox": [
+          519,
+          29,
+          913,
+          888
+        ],
+        "page": 8,
+        "bboxid": 7651
+      }
+    ],
+    "9": [
+      {
+        "id": "text_9_0",
+        "type": "text",
+        "bbox": [
+          81,
+          36,
+          480,
+          895
+        ],
+        "page": 9,
+        "bboxid": 7652
+      },
+      {
+        "id": "text_9_1",
+        "type": "text",
+        "bbox": [
+          519,
+          63,
+          913,
+          815
+        ],
+        "page": 9,
+        "bboxid": 7653
+      }
+    ],
+    "10": [
+      {
+        "id": "text_10_0",
+        "type": "text",
+        "bbox": [
+          178,
+          68,
+          385,
+          83
+        ],
+        "page": 10,
+        "bboxid": 7654
+      },
+      {
+        "id": "text_10_1",
+        "type": "text",
+        "bbox": [
+          84,
+          87,
+          477,
+          114
+        ],
+        "page": 10,
+        "bboxid": 7655
+      },
+      {
+        "id": "text_10_2",
+        "type": "text",
+        "bbox": [
+          93,
+          122,
+          478,
+          424
+        ],
+        "page": 10,
+        "bboxid": 7656
+      },
+      {
+        "id": "text_10_3",
+        "type": "text",
+        "bbox": [
+          86,
+          438,
+          447,
+          452
+        ],
+        "page": 10,
+        "bboxid": 7657
+      },
+      {
+        "id": "text_10_4",
+        "type": "text",
+        "bbox": [
+          86,
+          455,
+          477,
+          566
+        ],
+        "page": 10,
+        "bboxid": 7658
+      },
+      {
+        "id": "image_10_5",
+        "type": "image",
+        "bbox": [
+          88,
+          585,
+          480,
+          763
+        ],
+        "page": 10,
+        "bboxid": 7659
+      },
+      {
+        "id": "text_10_6",
+        "type": "text",
+        "bbox": [
+          88,
+          828,
+          290,
+          843
+        ],
+        "page": 10,
+        "bboxid": 7660
+      },
+      {
+        "id": "text_10_7",
+        "type": "text",
+        "bbox": [
+          86,
+          847,
+          477,
+          888
+        ],
+        "page": 10,
+        "bboxid": 7661
+      },
+      {
+        "id": "text_10_8",
+        "type": "text",
+        "bbox": [
+          519,
+          69,
+          911,
+          222
+        ],
+        "page": 10,
+        "bboxid": 7662
+      },
+      {
+        "id": "text_10_9",
+        "type": "text",
+        "bbox": [
+          519,
+          232,
+          867,
+          247
+        ],
+        "page": 10,
+        "bboxid": 7663
+      },
+      {
+        "id": "text_10_10",
+        "type": "text",
+        "bbox": [
+          519,
+          250,
+          911,
+          345
+        ],
+        "page": 10,
+        "bboxid": 7664
+      },
+      {
+        "id": "text_10_11",
+        "type": "text",
+        "bbox": [
+          519,
+          353,
+          911,
+          506
+        ],
+        "page": 10,
+        "bboxid": 7665
+      },
+      {
+        "id": "text_10_12",
+        "type": "text",
+        "bbox": [
+          519,
+          512,
+          911,
+          611
+        ],
+        "page": 10,
+        "bboxid": 7666
+      },
+      {
+        "id": "text_10_13",
+        "type": "text",
+        "bbox": [
+          519,
+          617,
+          911,
+          672
+        ],
+        "page": 10,
+        "bboxid": 7667
+      },
+      {
+        "id": "text_10_14",
+        "type": "text",
+        "bbox": [
+          521,
+          684,
+          769,
+          698
+        ],
+        "page": 10,
+        "bboxid": 7668
+      },
+      {
+        "id": "text_10_15",
+        "type": "text",
+        "bbox": [
+          519,
+          702,
+          911,
+          728
+        ],
+        "page": 10,
+        "bboxid": 7669
+      },
+      {
+        "id": "text_10_16",
+        "type": "text",
+        "bbox": [
+          519,
+          736,
+          911,
+          888
+        ],
+        "page": 10,
+        "bboxid": 7670
+      }
+    ],
+    "11": [
+      {
+        "id": "image_11_0",
+        "type": "image",
+        "bbox": [
+          125,
+          70,
+          874,
+          452
+        ],
+        "page": 11,
+        "bboxid": 7671
+      },
+      {
+        "id": "text_11_1",
+        "type": "text",
+        "bbox": [
+          86,
+          521,
+          477,
+          618
+        ],
+        "page": 11,
+        "bboxid": 7672
+      },
+      {
+        "id": "text_11_2",
+        "type": "text",
+        "bbox": [
+          86,
+          630,
+          478,
+          727
+        ],
+        "page": 11,
+        "bboxid": 7673
+      },
+      {
+        "id": "text_11_3",
+        "type": "text",
+        "bbox": [
+          86,
+          738,
+          477,
+          808
+        ],
+        "page": 11,
+        "bboxid": 7674
+      },
+      {
+        "id": "text_11_4",
+        "type": "text",
+        "bbox": [
+          86,
+          819,
+          477,
+          888
+        ],
+        "page": 11,
+        "bboxid": 7675
+      },
+      {
+        "id": "text_11_5",
+        "type": "text",
+        "bbox": [
+          519,
+          522,
+          911,
+          563
+        ],
+        "page": 11,
+        "bboxid": 7676
+      },
+      {
+        "id": "text_11_6",
+        "type": "text",
+        "bbox": [
+          521,
+          578,
+          753,
+          594
+        ],
+        "page": 11,
+        "bboxid": 7677
+      },
+      {
+        "id": "text_11_7",
+        "type": "text",
+        "bbox": [
+          521,
+          601,
+          911,
+          821
+        ],
+        "page": 11,
+        "bboxid": 7678
+      },
+      {
+        "id": "text_11_8",
+        "type": "text",
+        "bbox": [
+          519,
+          833,
+          911,
+          888
+        ],
+        "page": 11,
+        "bboxid": 7679
+      }
+    ],
+    "12": [
+      {
+        "id": "table_12_0",
+        "type": "table",
+        "bbox": [
+          84,
+          65,
+          913,
+          364
+        ],
+        "page": 12,
+        "bboxid": 7680
+      },
+      {
+        "id": "table_12_1",
+        "type": "table",
+        "bbox": [
+          117,
+          455,
+          446,
+          587
+        ],
+        "page": 12,
+        "bboxid": 7681
+      },
+      {
+        "id": "text_12_2",
+        "type": "text",
+        "bbox": [
+          86,
+          656,
+          477,
+          809
+        ],
+        "page": 12,
+        "bboxid": 7682
+      },
+      {
+        "id": "text_12_3",
+        "type": "text",
+        "bbox": [
+          86,
+          824,
+          436,
+          839
+        ],
+        "page": 12,
+        "bboxid": 7683
+      },
+      {
+        "id": "text_12_4",
+        "type": "text",
+        "bbox": [
+          84,
+          847,
+          477,
+          888
+        ],
+        "page": 12,
+        "bboxid": 7684
+      },
+      {
+        "id": "text_12_5",
+        "type": "text",
+        "bbox": [
+          519,
+          459,
+          911,
+          515
+        ],
+        "page": 12,
+        "bboxid": 7685
+      },
+      {
+        "id": "text_12_6",
+        "type": "text",
+        "bbox": [
+          519,
+          522,
+          911,
+          619
+        ],
+        "page": 12,
+        "bboxid": 7686
+      },
+      {
+        "id": "text_12_7",
+        "type": "text",
+        "bbox": [
+          519,
+          627,
+          911,
+          710
+        ],
+        "page": 12,
+        "bboxid": 7687
+      },
+      {
+        "id": "text_12_8",
+        "type": "text",
+        "bbox": [
+          519,
+          718,
+          911,
+          773
+        ],
+        "page": 12,
+        "bboxid": 7688
+      }
+    ],
+    "13": [
+      {
+        "id": "image_13_0",
+        "type": "image",
+        "bbox": [
+          129,
+          193,
+          866,
+          727
+        ],
+        "page": 13,
+        "bboxid": 7689
+      }
+    ]
+  }
+}
