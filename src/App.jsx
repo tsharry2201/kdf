@@ -6,7 +6,6 @@ import InteractivePDFViewer2 from './components/InteractivePDFViewer2'
 import InteractivePDFViewer3 from './components/InteractivePDFViewer3'
 import InteractivePDFViewer4 from './components/InteractivePDFViewer4'
 import KDFViewer from './components/KDFViewer'
-import KDFTester from './components/KDFTester'
 import KDFReader from './components/KDFReader'
 import './App.css'
 // 修复 react-pdf 的 TextLayer 与 AnnotationLayer 警告，并确保层叠关系正确显示
@@ -15,7 +14,7 @@ import 'react-pdf/dist/Page/TextLayer.css'
 
 function App() {
   const [pdfFile, setPdfFile] = useState(null)
-  const [activeTab, setActiveTab] = useState('viewer') // 'viewer' | 'parser' | 'editor' | 'editor2' | 'editor3' | 'editor4' | 'kdf' | 'reader' | 'tester'
+  const [activeTab, setActiveTab] = useState('viewer') // 'viewer' | 'parser' | 'editor' | 'editor2' | 'editor3' | 'editor4' | 'kdf' | 'reader'
   const [ppBlocks3, setPpBlocks3] = useState(null)
   const [ppJobId3, setPpJobId3] = useState(null)
   const [ppLoading, setPpLoading] = useState(false)
@@ -81,12 +80,6 @@ function App() {
             📚 编辑器 5.0
           </button>
           <button
-            className={`tab-button ${activeTab === 'tester' ? 'active' : ''}`}
-            onClick={() => setActiveTab('tester')}
-          >
-            🧪 KDF Tester
-          </button>
-          <button
             className={`tab-button ${activeTab === 'reader' ? 'active' : ''}`}
             onClick={() => setActiveTab('reader')}
           >
@@ -128,8 +121,6 @@ function App() {
           <KDFViewer file={pdfFile} />
         ) : activeTab === 'reader' ? (
           <KDFReader file={pdfFile} />
-        ) : activeTab === 'tester' ? (
-          <KDFTester />
         ) : !pdfFile ? (
           <div className="empty-state">
             <div className="empty-icon">📁</div>

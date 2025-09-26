@@ -1,7 +1,6 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import * as pdfjsLib from 'pdfjs-dist'
-import { BBoxLayer, projectBBoxToRenderRect, SCALE_BASE } from './pdf/BBoxOverlay'
 // CSS样式已在App.css中定义
 
 // 上传文件组件
@@ -254,7 +253,7 @@ const AudioProgressBar = ({
   attachment, 
   audioStates, 
   handleAudioProgressChange, 
-  formatTime
+  formatTime 
 }) => {
   const hasStartedPlaying = audioStates[attachment.id]?.hasStarted
   const duration = audioStates[attachment.id]?.duration
@@ -354,45 +353,6 @@ const adjustRectWithTuning = (rect, tuning) => {
     width: finalWidth,
     height: finalHeight
   }
-}
-
-const normalizeBlocksByPage = (raw) => {
-  if (!raw) return {}
-
-  const coerceBlocks = (blocks) => {
-    if (!Array.isArray(blocks)) return []
-    return blocks.map((block) => ({
-      ...block,
-      bbox: Array.isArray(block?.bbox) ? block.bbox : []
-    }))
-  }
-
-  const result = {}
-
-  if (Array.isArray(raw)) {
-    raw.forEach((block) => {
-      if (!block) return
-      const pageKey = String(block.page ?? block.pageNumber ?? block.page_id ?? block.pageId ?? 1)
-      if (!result[pageKey]) {
-        result[pageKey] = []
-      }
-      result[pageKey].push({
-        ...block,
-        bbox: Array.isArray(block?.bbox) ? block.bbox : []
-      })
-    })
-    return result
-  }
-
-  Object.entries(raw).forEach(([pageId, blocks]) => {
-    const key = String(pageId)
-    const list = coerceBlocks(blocks)
-    if (list.length > 0) {
-      result[key] = list
-    }
-  })
-
-  return result
 }
 
 const pickSizeFromBlocks = (blocks, field) => {
@@ -581,14 +541,9 @@ const KDFViewer = ({ file }) => {
     useAbsWidth: false,
     useAbsHeight: false,
     absWidth: null,
-  absHeight: null
-})
+    absHeight: null
+  })
   const attachmentsRef = useRef([])
-  const renderMetricsRef = useRef({})
-  const layoutJsonInputRef = useRef(null)
-
-  const [manualLayout, setManualLayout] = useState(null)
-  const [layoutSource, setLayoutSource] = useState(null)
 
   const pageRef = useRef(null) // 保留：外层容器
   const pageWrapperRef = useRef(null) // 新增：实际页面包裹层（与高亮同层）
@@ -600,19 +555,6 @@ const KDFViewer = ({ file }) => {
     verbosity: 0,
     enableXfa: true
   }), [])
-
-  const pageKey = String(pageNumber)
-  const rawLayoutBlocks = lpBlocksByPage && (lpBlocksByPage[pageKey] || lpBlocksByPage[pageNumber])
-  const overlayBlocks = Array.isArray(rawLayoutBlocks) ? rawLayoutBlocks : []
-  const overlayMetrics = renderMetricsRef.current[pageNumber]
-    || (typeof contentDimensions.width === 'number' && typeof contentDimensions.height === 'number'
-      ? {
-          renderWidth: contentDimensions.width,
-          renderHeight: contentDimensions.height,
-          offsetX: 0,
-          offsetY: 0
-        }
-      : null)
 
   const onDocumentLoadSuccess = (pdf) => {
     console.log('交互式编辑器PDF加载成功，页数:', pdf?.numPages)
@@ -1024,6 +966,7 @@ const KDFViewer = ({ file }) => {
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
     return hashHex
   }
+
   // 根据targetId从lpBlocksByPage中查找对应的bboxid
   const findBboxIdByTargetId = (targetId, pageNumber) => {
     if (!lpBlocksByPage || !targetId) return null
@@ -1123,31 +1066,52 @@ const KDFViewer = ({ file }) => {
           let convertedArea = { x: 0, y: 0, width: 200, height: 150 } // 默认尺寸
           
           if (bboxInfo && bboxInfo.bbox && Array.isArray(bboxInfo.bbox) && bboxInfo.bbox.length >= 4) {
-            const metrics = renderMetricsRef.current[pageNumber]
-            const baseRect = projectBBoxToRenderRect(bboxInfo.bbox, metrics)
-
-            if (baseRect) {
-              const scaledPosition = adjustRectWithTuning(baseRect, bboxTuning)
-
-              convertedArea = {
-                x: Math.round(scaledPosition.x),
-                y: Math.round(scaledPosition.y),
-                width: Math.round(scaledPosition.width),
-                height: Math.round(scaledPosition.height)
+            // 使用与主坐标转换逻辑相同的参数
+            // 这些参数应该与parsedByPage中使用的参数保持一致
+            const sX = 0.86  // 与主逻辑保持一致
+            const sY = 0.86  // 与主逻辑保持一致
+            
+            // 获取页面偏移量 - 需要从当前页面元素获取
+            let offsetX = 0, offsetY = 0
+            
+            // 尝试从页面元素获取偏移量
+            const pageElement = pageWrapperRef.current?.querySelector(`[data-page-number="${pageNumber}"]`)
+            if (pageElement) {
+              const pageRect = pageElement.getBoundingClientRect()
+              const wrapperRect = pageWrapperRef.current?.getBoundingClientRect()
+              if (pageRect && wrapperRect) {
+                offsetX = pageRect.left - wrapperRect.left
+                offsetY = pageRect.top - wrapperRect.top
               }
-
-              console.log('坐标转换:', {
-                originalBbox: bboxInfo.bbox,
-                convertedArea,
-                metrics
-              })
-            } else {
-              console.warn('无法根据当前渲染指标转换bbox:', {
-                pageNumber,
-                bbox: bboxInfo.bbox,
-                metrics
-              })
             }
+            
+            // PDF坐标 [x1, y1, x2, y2] 转换为页面像素坐标
+            const x1 = bboxInfo.bbox[0] // Xmin
+            const y1 = bboxInfo.bbox[1] // Ymin
+            const x2 = bboxInfo.bbox[2] // Xmax
+            const y2 = bboxInfo.bbox[3] // Ymax
+            
+            const pxX = offsetX + x1 * sX
+            const pxY = offsetY + y1 * sY
+            const pxW = Math.max(1, (x2 - x1) * sX)
+            const pxH = Math.max(1, (y2 - y1) * sY)
+            
+            // 应用bbox调整参数
+            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
+            
+            convertedArea = {
+              x: Math.round(scaledPosition.x),
+              y: Math.round(scaledPosition.y),
+              width: Math.round(scaledPosition.width),
+              height: Math.round(scaledPosition.height)
+            }
+            
+            console.log('坐标转换:', {
+              originalBbox: bboxInfo.bbox,
+              convertedArea: convertedArea,
+              scale: { x: sX, y: sY },
+              offset: { x: offsetX, y: offsetY }
+            })
           }
           
           // 创建附件对象
@@ -1364,88 +1328,6 @@ const KDFViewer = ({ file }) => {
     }
   }
 
-  const updateLayoutBlocks = (blocksByPage, source) => {
-    setLpBlocksByPage(blocksByPage ? { ...blocksByPage } : null)
-    setLayoutSource(source)
-  }
-
-  const handleLayoutJsonUpload = async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const raw = await file.text()
-      const parsed = JSON.parse(raw)
-      const normalized = normalizeBlocksByPage(parsed?.blocksByPage ?? parsed)
-
-      if (Object.keys(normalized).length === 0) {
-        throw new Error('JSON 中未找到有效的 blocksByPage 数据')
-      }
-
-      setManualLayout({
-        jobId: parsed?.jobId || '',
-        fileName: file.name,
-        blocksByPage: normalized
-      })
-
-      updateLayoutBlocks(normalized, 'manual')
-      setLpError(null)
-    } catch (error) {
-      console.error('解析布局JSON失败:', error)
-      setLpError(`解析布局JSON失败: ${error?.message || error}`)
-    } finally {
-      if (event.target) {
-        event.target.value = ''
-      }
-    }
-  }
-
-  const handleLocalParse = async () => {
-    if (!pdfFile || lpParsing) return
-
-    try {
-      setLpParsing(true)
-      setLpError(null)
-
-      const fd = new FormData()
-      fd.append('files', pdfFile)
-      fd.append('return_content_list', 'true')
-      fd.append('return_md', 'false')
-      fd.append('return_layout', 'false')
-      fd.append('return_middle_json', 'false')
-      fd.append('return_model_output', 'false')
-
-      console.log('发送后端解析请求:', pdfFile?.name)
-      const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
-
-      if (!resp.ok) {
-        const errBody = await resp.json().catch(() => ({}))
-        throw new Error(errBody?.detail || `后端解析失败(${resp.status})`)
-      }
-
-      const data = await resp.json()
-      const normalized = normalizeBlocksByPage(data?.blocksByPage ?? data)
-
-      if (Object.keys(normalized).length === 0) {
-        throw new Error('解析结果为空')
-      }
-
-      console.log('本地解析成功:', { source: 'api', blocksByPage: normalized })
-      updateLayoutBlocks(normalized, 'api')
-      setLpError(null)
-    } catch (error) {
-      console.error('本地解析失败:', error)
-      setLpError(`本地解析失败: ${error?.message || error}`)
-
-      if (manualLayout?.blocksByPage) {
-        console.log('使用手动JSON作为回退结果')
-        updateLayoutBlocks(manualLayout.blocksByPage, 'manual-fallback')
-      }
-    } finally {
-      setLpParsing(false)
-    }
-  }
-
 
   // 处理操作菜单点击函数已移除，现在使用直接的显示/隐藏和删除按钮
 
@@ -1462,11 +1344,14 @@ const KDFViewer = ({ file }) => {
     }
   }, [showContextMenu, showFileTypeMenu])
 
+  // 用于跟踪当前处理的文件，避免重复请求
+  const currentProcessingFileRef = useRef(null)
+
   useEffect(() => {
     setPdfFile(file || null)
   }, [file])
 
-  useEffect(() => {
+    useEffect(() => {
     console.log('KDF Viewer useEffect触发，文件:', pdfFile?.name)
     setError(null)
     setPageNumber(1)
@@ -1478,11 +1363,10 @@ const KDFViewer = ({ file }) => {
     setLpBlocksByPage(null)
     setLpParsing(false)
     setLpError(null)
-    setManualLayout(null)
-    setLayoutSource(null)
 
     if (!pdfFile) {
       setLoading(false)
+      currentProcessingFileRef.current = null
       return
     }
 
@@ -1501,6 +1385,49 @@ const KDFViewer = ({ file }) => {
       setLoading(false)
       return
     }
+
+    const fileId = `${pdfFile.name}-${pdfFile.size}-${pdfFile.lastModified ?? 'no-last-modified'}`
+
+    if (currentProcessingFileRef.current === fileId) {
+      console.log('文件已在处理中，跳过重复请求')
+      setLoading(false)
+      return
+    }
+
+    currentProcessingFileRef.current = fileId
+
+    ;(async () => {
+      try {
+        setLpParsing(true)
+        setLpError(null)
+        const fd = new FormData()
+        fd.append('files', pdfFile)
+        fd.append('return_content_list', 'true')
+        fd.append('return_md', 'false')
+        fd.append('return_layout', 'false')
+        fd.append('return_middle_json', 'false')
+        fd.append('return_model_output', 'false')
+
+        console.log('发送本地解析请求，文件ID:', fileId)
+        const resp = await fetch('http://127.0.0.1:8081/api/file_parse', { method: 'POST', body: fd })
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}))
+          throw new Error(err?.detail || `后端解析失败(${resp.status})`)
+        }
+        const data = await resp.json()
+        console.log('本地解析请求成功，文件ID:', fileId, data)
+        setLpBlocksByPage(data?.blocksByPage || {})
+      } catch (e) {
+        console.error('本地解析失败:', e)
+        setLpError(String(e?.message || e))
+      } finally {
+        setLpParsing(false)
+        if (currentProcessingFileRef.current === fileId) {
+          currentProcessingFileRef.current = null
+        }
+      }
+    })()
   }, [pdfFile])
 
   // 当页面改变时重置缩放比例和内容尺寸
@@ -1684,22 +1611,30 @@ const KDFViewer = ({ file }) => {
 
           const targetWidth = Math.max(1, pdfRenderWidth)
           const targetHeight = Math.max(1, pdfRenderHeight)
+          const sourceInfo = resolveSourceSize({
+            blocks: lpBlocks,
+            viewport,
+            method: coordinateMethod
+          })
 
-          const metrics = {
-            offsetX,
-            offsetY,
-            renderWidth: targetWidth,
-            renderHeight: targetHeight
+          let sX = targetWidth / Math.max(1, sourceInfo.width)
+          let sY = targetHeight / Math.max(1, sourceInfo.height)
+
+          if (sourceInfo.basis === 'bbox_extents') {
+            const ratio = Math.max(sX, sY) / Math.max(1e-6, Math.min(sX, sY))
+            if (ratio > 1.2) {
+              const uniformScale = Math.min(sX, sY)
+              console.log('bbox尺度差异过大，采用统一缩放', { sX, sY, uniformScale, sourceInfo, targetSize: { width: targetWidth, height: targetHeight } })
+              sX = uniformScale
+              sY = uniformScale
+            }
           }
-          renderMetricsRef.current[pageNumber] = metrics
-
+          sX = sY = 0.86
           console.log('坐标转换准备:', {
             pageNumber,
+            source: sourceInfo,
             targetSize: { width: targetWidth, height: targetHeight },
-            scale: {
-              x: metrics.renderWidth / SCALE_BASE,
-              y: metrics.renderHeight / SCALE_BASE
-            },
+            scale: { x: sX, y: sY },
             offset: { x: offsetX, y: offsetY }
           })
 
@@ -1711,23 +1646,22 @@ const KDFViewer = ({ file }) => {
           }
 
           const annsRaw = (lpBlocks || []).map((b, idx) => {
-            const baseRect = projectBBoxToRenderRect(b.bbox, metrics)
-            if (!baseRect) {
-              if (idx < 3) {
-                console.log(`框 ${idx + 1} 无法转换:`, { originalBbox: b.bbox })
-              }
-              return null
-            }
+            const [x1, y1, x2, y2] = b.bbox || [0, 0, 0, 0]
+            const dx = (x2 - x1)
+            const dy = (y2 - y1)
+            // 坐标转换：bbox -> PDF渲染坐标
+            // 直接映射到PDF页面的渲染坐标系统
+            const pxX = offsetX + x1 * sX
+            const pxY = offsetY + y1 * sY
+            const pxW = Math.max(1, dx * sX)
+            const pxH = Math.max(1, dy * sY)
+            const scaledPosition = adjustRectWithTuning({ x: pxX, y: pxY, width: pxW, height: pxH }, bboxTuning)
 
-            const scaledPosition = adjustRectWithTuning(baseRect, bboxTuning)
-
+            // 调试信息：显示前几个框的坐标转换过程
             if (idx < 3) {
               console.log(`框 ${idx + 1} 坐标转换:`, {
-                originalBbox: b.bbox,
-                scale: {
-                  x: metrics.renderWidth / SCALE_BASE,
-                  y: metrics.renderHeight / SCALE_BASE
-                },
+                originalBbox: [x1, y1, x2, y2],
+                scale: { x: sX, y: sY },
                 offset: { x: offsetX, y: offsetY },
                 finalPosition: {
                   x: Math.round(scaledPosition.x),
@@ -1735,7 +1669,7 @@ const KDFViewer = ({ file }) => {
                   width: Math.round(scaledPosition.width),
                   height: Math.round(scaledPosition.height)
                 },
-                note: 'bbox -> PDF渲染坐标 (归一化转换)'
+                note: 'bbox -> PDF渲染坐标 (直接映射)'
               })
             }
 
@@ -1753,7 +1687,7 @@ const KDFViewer = ({ file }) => {
             }
           })
 
-          const anns = annsRaw.filter(Boolean).filter(a => !a.id.startsWith('text'))
+          const anns = annsRaw.filter(a => !a.id.startsWith('text'))
 
           console.log('边界框渲染结果:', {
             pageNumber,
@@ -3529,38 +3463,6 @@ const KDFViewer = ({ file }) => {
           <option value="dpi">bbox推断</option>
         </select>
 
-        <button
-          style={{
-            ...styles.button,
-            backgroundColor: '#007bff',
-            color: 'white',
-            marginLeft: '8px'
-          }}
-          onClick={handleLocalParse}
-          disabled={lpParsing || !pdfFile}
-        >
-          {lpParsing ? '解析中…' : '⚙️ 本地解析'}
-        </button>
-
-        <button
-          style={{
-            ...styles.button,
-            backgroundColor: '#6f42c1',
-            color: 'white',
-            marginLeft: '8px'
-          }}
-          onClick={() => layoutJsonInputRef.current?.click()}
-        >
-          📥 上传布局JSON
-        </button>
-        <input
-          ref={layoutJsonInputRef}
-          type="file"
-          accept="application/json"
-          style={{ display: 'none' }}
-          onChange={handleLayoutJsonUpload}
-        />
-
         {/* 手动调整偏移 (隐藏) */}
         <div style={{ display: 'none' }} />
 
@@ -3621,21 +3523,6 @@ const KDFViewer = ({ file }) => {
         <span>附件: {attachments.filter(a => a.pageNumber === pageNumber).length} 个</span>
         <span>关联图片: {associatedImages.filter(img => img.pageNumber === pageNumber).length} 个</span>
         {loadingMultimedias && <span style={{ color: '#007bff' }}>🔄 加载多媒体中...</span>}
-        {layoutSource && (
-          <span style={{ color: layoutSource.startsWith('manual') ? '#17a2b8' : '#28a745' }}>
-            {(() => {
-              const manualInfo = manualLayout ? [manualLayout.fileName, manualLayout.jobId].filter(Boolean).join(' / ') : ''
-              if (layoutSource === 'api') return '解析来源: 本地接口'
-              if (layoutSource === 'manual') {
-                return `解析来源: 手动JSON${manualInfo ? `（${manualInfo}）` : ''}`
-              }
-              return `解析来源: 手动JSON回退${manualInfo ? `（${manualInfo}）` : ''}`
-            })()}
-          </span>
-        )}
-        {lpError && (
-          <span style={{ color: '#dc3545' }}>解析失败: {lpError}</span>
-        )}
       </div>
 
       {/* PDF页面容器 - 使用CropBox尺寸，限制画布范围 */}
@@ -3739,15 +3626,6 @@ const KDFViewer = ({ file }) => {
                 className="interactive-page"
               />
             </Document>
-
-            {overlayMetrics && overlayBlocks.length > 0 && (
-              <BBoxLayer
-                blocks={overlayBlocks}
-                metrics={overlayMetrics}
-                interactive={false}
-                style={{ zIndex: 8, pointerEvents: 'none' }}
-              />
-            )}
 
 
 
